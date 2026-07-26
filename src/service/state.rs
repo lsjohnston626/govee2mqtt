@@ -1,5 +1,5 @@
 use crate::ble::{
-    Base64HexBytes, H7105FanAutoMode, SetDevicePower, SetH7105FanSpeed,
+    Base64HexBytes, SetDevicePower, SetH7105FanAutoMode, SetH7105FanSpeed,
     SetH7105NightlightBrightness, SetH7105NightlightColor, SetH7105NightlightPower,
     SetHumidifierMode, SetHumidifierNightlightParams,
 };
@@ -562,7 +562,7 @@ impl State {
         self: &Arc<Self>,
         device: &Device,
     ) -> anyhow::Result<()> {
-        let command = Base64HexBytes::encode_for_sku(&device.sku, &H7105FanAutoMode)?;
+        let command = Base64HexBytes::encode_for_sku(&device.sku, &SetH7105FanAutoMode)?;
         let iot = self.get_iot_client().await.context("IoT client unavailable")?;
         let info = device.undoc_device_info.as_ref().context("missing private device metadata")?;
         iot.send_real(&info.entry, command.base64()).await

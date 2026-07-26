@@ -240,11 +240,11 @@ impl PacketManager {
             0xaa, 0x05, 0x01, speed,
         ));
         all_codecs.push(packet!(
-            &["H7105"], H7105FanAutoMode, SetH7105FanAutoMode,
+            &["H7105"], SetH7105FanAutoMode, SetH7105FanAutoMode,
             0x33, 0x05, 0x00, 0x02,
         ));
         all_codecs.push(packet!(
-            &["H7105"], H7105FanAutoMode, NotifyH7105FanAutoMode,
+            &["H7105"], NotifyH7105FanAutoMode, NotifyH7105FanAutoMode,
             0xaa, 0x05, 0x00, 0x02,
         ));
         all_codecs.push(packet!(
@@ -537,7 +537,10 @@ pub struct SetH7105FanSpeed { pub speed: u8 }
 pub struct NotifyH7105FanSpeed { pub speed: u8 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct H7105FanAutoMode;
+pub struct SetH7105FanAutoMode;
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct NotifyH7105FanAutoMode;
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct SetH7105NightlightPower { pub on: bool }
@@ -577,8 +580,8 @@ pub enum GoveeBlePacket {
     H5086PowerReading(H5086PowerReading),
     SetH7105FanSpeed(SetH7105FanSpeed),
     NotifyH7105FanSpeed(NotifyH7105FanSpeed),
-    SetH7105FanAutoMode(H7105FanAutoMode),
-    NotifyH7105FanAutoMode(H7105FanAutoMode),
+    SetH7105FanAutoMode(SetH7105FanAutoMode),
+    NotifyH7105FanAutoMode(NotifyH7105FanAutoMode),
     SetH7105NightlightPower(SetH7105NightlightPower),
     SetH7105NightlightBrightness(SetH7105NightlightBrightness),
     SetH7105NightlightColor(SetH7105NightlightColor),
@@ -773,8 +776,8 @@ mod test {
             GoveeBlePacket::SetDevicePower(SetDevicePower { on: true }));
         round_trip("H7105", &SetH7105FanSpeed { speed: 12 },
             GoveeBlePacket::SetH7105FanSpeed(SetH7105FanSpeed { speed: 12 }));
-        round_trip("H7105", &H7105FanAutoMode,
-            GoveeBlePacket::SetH7105FanAutoMode(H7105FanAutoMode));
+        round_trip("H7105", &SetH7105FanAutoMode,
+            GoveeBlePacket::SetH7105FanAutoMode(SetH7105FanAutoMode));
         round_trip("H7105", &SetH7105NightlightPower { on: true },
             GoveeBlePacket::SetH7105NightlightPower(SetH7105NightlightPower { on: true }));
         round_trip("H7105", &SetH7105NightlightBrightness { brightness: 42 },
