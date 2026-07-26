@@ -138,7 +138,7 @@ impl H5086Measurement {
                 "Energy",
                 "energy",
                 "Wh",
-                StateClass::Total,
+                StateClass::TotalIncreasing,
             ),
             (
                 H5086MeasurementKind::PowerFactor,
@@ -201,7 +201,7 @@ impl EntityInstance for H5086Measurement {
             H5086MeasurementKind::Current => format!("{:.2}", reading.current()),
             H5086MeasurementKind::Voltage => format!("{:.2}", reading.voltage()),
             H5086MeasurementKind::Energy => format!("{:.1}", reading.energy_watt_hours()),
-            H5086MeasurementKind::PowerFactor => reading.power_factor_percent.to_string(),
+            H5086MeasurementKind::PowerFactor => reading.power_factor_percent().to_string(),
         };
         self.sensor.notify_state(client, &value).await
     }

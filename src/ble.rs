@@ -481,6 +481,10 @@ impl H5086PowerReading {
     pub fn power(self) -> f64 {
         self.power_centi_watts as f64 / 100.0
     }
+
+    pub fn power_factor_percent(self) -> u8 {
+        self.power_factor_percent.min(100)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -658,6 +662,14 @@ mod test {
                 power_centi_watts: 17509,
                 power_factor_percent: 100,
             })
+        );
+        assert_eq!(
+            H5086PowerReading {
+                power_factor_percent: 101,
+                ..Default::default()
+            }
+            .power_factor_percent(),
+            100
         );
     }
 
