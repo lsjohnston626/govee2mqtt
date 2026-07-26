@@ -249,21 +249,19 @@ impl PacketManager {
         ));
         all_codecs.push(packet!(
             &["H7105"],
-            SetH7105FanAutoMode,
-            SetH7105FanAutoMode,
+            SetH7105FanMode,
+            SetH7105FanMode,
             0x33,
             0x05,
             0x00,
-            0x02,
+            mode,
         ));
-        all_codecs.push(packet!(
+        all_codecs.push(PacketCodec::new(
             &["H7105"],
-            NotifyH7105FanAutoMode,
-            NotifyH7105FanAutoMode,
-            0xaa,
-            0x05,
-            0x00,
-            0x02,
+            |_mode: &NotifyH7105FanMode| {
+                anyhow::bail!("H7105 fan modes are device notifications")
+            },
+            NotifyH7105FanMode::decode,
         ));
         all_codecs.push(packet!(
             &["H7105"],
@@ -321,8 +319,13 @@ impl PacketManager {
         ));
         all_codecs.push(PacketCodec::new(
             &["H7105"],
+            SetH7105Oscillation::encode,
+            SetH7105Oscillation::decode,
+        ));
+        all_codecs.push(PacketCodec::new(
+            &["H7105"],
             |_state: &NotifyH7105Oscillation| {
-                anyhow::bail!("H7105 oscillation control is not validated")
+                anyhow::bail!("H7105 oscillation states are device notifications")
             },
             NotifyH7105Oscillation::decode,
         ));
@@ -609,10 +612,91 @@ impl NotifyH7105FanSpeed {
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct SetH7105FanAutoMode;
+#[repr(u8)]
+pub enum H7105FanMode {
+    #[default]
+    Normal = 1,
+    Custom = 2,
+    Auto = 3,
+    Sleep = 5,
+    Nature = 6,
+}
+
+impl H7105FanMode {
+    pub const ALL: [Self; 5] = [
+        Self::Normal,
+        Self::Auto,
+        Self::Nature,
+        Self::Custom,
+        Self::Sleep,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Custom => "Custom",
+            Self::Auto => "Auto",
+            Self::Sleep => "Sleep",
+            Self::Nature => "Nature",
+        }
+    }
+
+    pub fn from_name(name: &str) -> anyhow::Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.name().eq_ignore_ascii_case(name))
+            .ok_or_else(|| anyhow!("unsupported H7105 mode {name:?}"))
+    }
+}
+
+impl TryFrom<u8> for H7105FanMode {
+    type Error = anyhow::Error;
+
+    fn try_from(value: u8) -> anyhow::Result<Self> {
+        match value {
+            1 => Ok(Self::Normal),
+            2 => Ok(Self::Custom),
+            3 => Ok(Self::Auto),
+            5 => Ok(Self::Sleep),
+            6 => Ok(Self::Nature),
+            _ => anyhow::bail!("unknown H7105 fan mode {value}"),
+        }
+    }
+}
+
+impl DecodePacketParam for H7105FanMode {
+    fn decode_param<'a>(&mut self, data: &'a [u8]) -> anyhow::Result<&'a [u8]> {
+        let mut value = 0u8;
+        let remain = value.decode_param(data)?;
+        *self = value.try_into()?;
+        Ok(remain)
+    }
+
+    fn encode_param(&self, target: &mut Vec<u8>) {
+        target.push(*self as u8);
+    }
+}
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub struct NotifyH7105FanAutoMode;
+pub struct SetH7105FanMode {
+    pub mode: H7105FanMode,
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct NotifyH7105FanMode {
+    pub mode: H7105FanMode,
+}
+
+impl NotifyH7105FanMode {
+    fn decode(data: &[u8]) -> anyhow::Result<GoveeBlePacket> {
+        anyhow::ensure!(data.len() == 20, "expected a 20-byte H7105 packet");
+        anyhow::ensure!(data[0..3] == [0xaa, 0x05, 0x00], "not an H7105 fan mode notification");
+        anyhow::ensure!(calculate_checksum(&data[..19]) == data[19], "invalid checksum");
+        Ok(GoveeBlePacket::NotifyH7105FanMode(Self {
+            mode: data[3].try_into()?,
+        }))
+    }
+}
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct SetH7105NightlightPower {
@@ -645,8 +729,34 @@ pub struct NotifyH7105NightlightColor {
 }
 
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct SetH7105Oscillation {
+    pub oscillating: bool,
+    pub params: [u8; 4],
+}
+
+impl SetH7105Oscillation {
+    fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        let mut bytes = vec![0x3a, 0x1d, btoi(self.oscillating)];
+        bytes.extend(self.params);
+        Ok(finish(bytes))
+    }
+
+    fn decode(data: &[u8]) -> anyhow::Result<GoveeBlePacket> {
+        anyhow::ensure!(data.len() == 20, "expected a 20-byte H7105 packet");
+        anyhow::ensure!(data[0..2] == [0x3a, 0x1d], "not an H7105 oscillation command");
+        anyhow::ensure!(matches!(data[2], 0x00 | 0x01), "invalid oscillation value");
+        anyhow::ensure!(calculate_checksum(&data[..19]) == data[19], "invalid checksum");
+        Ok(GoveeBlePacket::SetH7105Oscillation(Self {
+            oscillating: data[2] == 0x01,
+            params: data[3..7].try_into()?,
+        }))
+    }
+}
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct NotifyH7105Oscillation {
     pub oscillating: bool,
+    pub params: [u8; 4],
 }
 
 impl NotifyH7105Oscillation {
@@ -662,6 +772,7 @@ impl NotifyH7105Oscillation {
         );
         Ok(GoveeBlePacket::NotifyH7105Oscillation(Self {
             oscillating: data[2] == 0x01,
+            params: data[3..7].try_into()?,
         }))
     }
 }
@@ -672,13 +783,14 @@ pub enum GoveeBlePacket {
     H5086PowerReading(H5086PowerReading),
     SetH7105FanSpeed(SetH7105FanSpeed),
     NotifyH7105FanSpeed(NotifyH7105FanSpeed),
-    SetH7105FanAutoMode(SetH7105FanAutoMode),
-    NotifyH7105FanAutoMode(NotifyH7105FanAutoMode),
+    SetH7105FanMode(SetH7105FanMode),
+    NotifyH7105FanMode(NotifyH7105FanMode),
     SetH7105NightlightPower(SetH7105NightlightPower),
     SetH7105NightlightBrightness(SetH7105NightlightBrightness),
     SetH7105NightlightColor(SetH7105NightlightColor),
     NotifyH7105NightlightState(NotifyH7105NightlightState),
     NotifyH7105NightlightColor(NotifyH7105NightlightColor),
+    SetH7105Oscillation(SetH7105Oscillation),
     NotifyH7105Oscillation(NotifyH7105Oscillation),
     #[allow(unused)] // can remove if/when SetSceneCode::decode has an impl
     SetSceneCode(SetSceneCode),
@@ -874,11 +986,13 @@ mod test {
             &SetH7105FanSpeed { speed: 12 },
             GoveeBlePacket::SetH7105FanSpeed(SetH7105FanSpeed { speed: 12 }),
         );
-        round_trip(
-            "H7105",
-            &SetH7105FanAutoMode,
-            GoveeBlePacket::SetH7105FanAutoMode(SetH7105FanAutoMode),
-        );
+        for mode in H7105FanMode::ALL {
+            round_trip(
+                "H7105",
+                &SetH7105FanMode { mode },
+                GoveeBlePacket::SetH7105FanMode(SetH7105FanMode { mode }),
+            );
+        }
         round_trip(
             "H7105",
             &SetH7105NightlightPower { on: true },
@@ -913,6 +1027,39 @@ mod test {
                 ]
             ),
             GoveeBlePacket::NotifyH7105FanSpeed(NotifyH7105FanSpeed { speed: 12 })
+        );
+        assert_eq!(
+            MGR.decode_for_sku(
+                "H7105",
+                &[0xaa, 0x05, 0x00, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xa9]
+            ),
+            GoveeBlePacket::NotifyH7105FanMode(NotifyH7105FanMode {
+                mode: H7105FanMode::Nature,
+            })
+        );
+        round_trip(
+            "H7105",
+            &SetH7105Oscillation {
+                oscillating: true,
+                params: [0x03, 0x5a, 0x04, 0xb0],
+            },
+            GoveeBlePacket::SetH7105Oscillation(SetH7105Oscillation {
+                oscillating: true,
+                params: [0x03, 0x5a, 0x04, 0xb0],
+            }),
+        );
+        assert_eq!(
+            MGR.decode_for_sku(
+                "H7105",
+                &[
+                    0xaa, 0x1d, 0x00, 0x03, 0x5a, 0x04, 0xb0, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0x5b,
+                ]
+            ),
+            GoveeBlePacket::NotifyH7105Oscillation(NotifyH7105Oscillation {
+                oscillating: false,
+                params: [0x03, 0x5a, 0x04, 0xb0],
+            })
         );
     }
 

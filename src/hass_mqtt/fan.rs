@@ -1,3 +1,4 @@
+use crate::ble::H7105FanMode;
 use crate::hass_mqtt::base::{Device, EntityConfig, Origin};
 use crate::hass_mqtt::instance::{publish_entity_config, EntityInstance};
 use crate::service::device::Device as ServiceDevice;
@@ -18,6 +19,7 @@ pub struct FanConfig {
     pub preset_mode_command_topic: String,
     pub preset_mode_state_topic: String,
     pub preset_modes: Vec<String>,
+    pub oscillation_command_topic: String,
     pub oscillation_state_topic: String,
     pub payload_on: String,
     pub payload_off: String,
@@ -60,7 +62,11 @@ impl H7105Fan {
                 percentage_state_topic: topic(device, "speed/state"),
                 preset_mode_command_topic: topic(device, "preset/command"),
                 preset_mode_state_topic: topic(device, "preset/state"),
-                preset_modes: vec!["Auto".to_string()],
+                preset_modes: H7105FanMode::ALL
+                    .into_iter()
+                    .map(|mode| mode.name().to_string())
+                    .collect(),
+                oscillation_command_topic: topic(device, "oscillation/command"),
                 oscillation_state_topic: topic(device, "oscillation/state"),
                 payload_on: "ON".to_string(),
                 payload_off: "OFF".to_string(),
@@ -100,12 +106,11 @@ impl EntityInstance for H7105Fan {
                 .publish(&self.config.percentage_state_topic, speed.to_string())
                 .await?;
         }
-        client
-            .publish(
-                &self.config.preset_mode_state_topic,
-                if fan.auto { "Auto" } else { "None" },
-            )
-            .await?;
+        if let Some(mode) = fan.mode {
+            client
+                .publish(&self.config.preset_mode_state_topic, mode.name())
+                .await?;
+        }
         if let Some(oscillating) = fan.oscillating {
             client
                 .publish(
@@ -156,12 +161,27 @@ pub async fn mqtt_h7105_preset(
     Params(FanId { id }): Params<FanId>,
     State(state): State<StateHandle>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        payload.eq_ignore_ascii_case("auto"),
-        "unsupported H7105 preset {payload:?}"
-    );
+    let mode = H7105FanMode::from_name(&payload)?;
     let device = state.resolve_device_for_control(&id).await?;
-    state.h7105_set_auto(&device).await?;
+    state.h7105_set_mode(&device, mode).await?;
+    state.poll_iot_api(&device).await?;
+    Ok(())
+}
+
+pub async fn mqtt_h7105_oscillation(
+    Payload(payload): Payload<String>,
+    Params(FanId { id }): Params<FanId>,
+    State(state): State<StateHandle>,
+) -> anyhow::Result<()> {
+    let oscillating = match payload.as_str() {
+        "ON" => true,
+        "OFF" => false,
+        _ => anyhow::bail!("invalid H7105 oscillation payload {payload:?}"),
+    };
+    let device = state.resolve_device_for_control(&id).await?;
+    state
+        .h7105_set_oscillation(&device, oscillating)
+        .await?;
     state.poll_iot_api(&device).await?;
     Ok(())
 }

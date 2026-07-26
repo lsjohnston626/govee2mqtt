@@ -1,6 +1,7 @@
 use crate::ble::{
-    Base64HexBytes, SetDevicePower, SetH7105FanAutoMode, SetH7105FanSpeed,
+    Base64HexBytes, H7105FanMode, SetDevicePower, SetH7105FanMode, SetH7105FanSpeed,
     SetH7105NightlightBrightness, SetH7105NightlightColor, SetH7105NightlightPower,
+    SetH7105Oscillation,
     SetHumidifierMode, SetHumidifierNightlightParams,
 };
 use crate::lan_api::{Client as LanClient, DeviceStatus as LanDeviceStatus, LanDevice};
@@ -570,8 +571,13 @@ impl State {
         iot.send_real(&info.entry, command.base64()).await
     }
 
-    pub async fn h7105_set_auto(self: &Arc<Self>, device: &Device) -> anyhow::Result<()> {
-        let command = Base64HexBytes::encode_for_sku(&device.sku, &SetH7105FanAutoMode)?;
+    pub async fn h7105_set_mode(
+        self: &Arc<Self>,
+        device: &Device,
+        mode: H7105FanMode,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(device.sku == "H7105", "not an H7105 device");
+        let command = Base64HexBytes::encode_for_sku(&device.sku, &SetH7105FanMode { mode })?;
         let iot = self
             .get_iot_client()
             .await
@@ -581,6 +587,34 @@ impl State {
             .as_ref()
             .context("missing private device metadata")?;
         iot.send_real(&info.entry, command.base64()).await
+    }
+
+    pub async fn h7105_set_oscillation(
+        self: &Arc<Self>,
+        device: &Device,
+        oscillating: bool,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(device.sku == "H7105", "not an H7105 device");
+        let params = device
+            .h7105_fan_state
+            .oscillation_params
+            .context("H7105 oscillation parameters unavailable; wait for a device poll")?;
+        let command = Base64HexBytes::encode_for_sku(
+            &device.sku,
+            &SetH7105Oscillation {
+                oscillating,
+                params,
+            },
+        )?;
+        let iot = self
+            .get_iot_client()
+            .await
+            .context("IoT client unavailable")?;
+        let info = device
+            .undoc_device_info
+            .as_ref()
+            .context("missing private device metadata")?;
+        iot.send_multi_sync(&info.entry, command.base64()).await
     }
 
     pub async fn humidifier_set_parameter(

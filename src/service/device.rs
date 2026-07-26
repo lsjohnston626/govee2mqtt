@@ -1,4 +1,4 @@
-use crate::ble::{H5086PowerReading, NotifyHumidifierNightlightParams};
+use crate::ble::{H5086PowerReading, H7105FanMode, NotifyHumidifierNightlightParams};
 use crate::commands::serve::POLL_INTERVAL;
 use crate::lan_api::{DeviceColor, DeviceStatus as LanDeviceStatus, LanDevice};
 use crate::platform_api::{
@@ -14,8 +14,9 @@ use std::net::IpAddr;
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct H7105FanState {
     pub speed: Option<u8>,
-    pub auto: bool,
+    pub mode: Option<H7105FanMode>,
     pub oscillating: Option<bool>,
+    pub oscillation_params: Option<[u8; 4]>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -198,15 +199,15 @@ impl Device {
 
     pub fn set_h7105_speed(&mut self, speed: u8) {
         self.h7105_fan_state.speed.replace(speed);
-        self.h7105_fan_state.auto = false;
     }
 
-    pub fn set_h7105_auto_mode(&mut self) {
-        self.h7105_fan_state.auto = true;
+    pub fn set_h7105_mode(&mut self, mode: H7105FanMode) {
+        self.h7105_fan_state.mode.replace(mode);
     }
 
-    pub fn set_h7105_oscillation(&mut self, oscillating: bool) {
+    pub fn set_h7105_oscillation(&mut self, oscillating: bool, params: [u8; 4]) {
         self.h7105_fan_state.oscillating.replace(oscillating);
+        self.h7105_fan_state.oscillation_params.replace(params);
     }
 
     pub fn set_target_humidity(&mut self, percent: u8) {

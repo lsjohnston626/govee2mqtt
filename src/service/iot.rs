@@ -469,11 +469,14 @@ async fn run_iot_subscriber(
                                             GoveeBlePacket::NotifyH7105FanSpeed(update) => {
                                                 device.set_h7105_speed(update.speed);
                                             }
-                                            GoveeBlePacket::NotifyH7105FanAutoMode(_) => {
-                                                device.set_h7105_auto_mode();
+                                            GoveeBlePacket::NotifyH7105FanMode(update) => {
+                                                device.set_h7105_mode(update.mode);
                                             }
                                             GoveeBlePacket::NotifyH7105Oscillation(update) => {
-                                                device.set_h7105_oscillation(update.oscillating);
+                                                device.set_h7105_oscillation(
+                                                    update.oscillating,
+                                                    update.params,
+                                                );
                                             }
                                             GoveeBlePacket::NotifyH7105NightlightState(update) => {
                                                 let mut nightlight =
@@ -502,7 +505,8 @@ async fn run_iot_subscriber(
                                             GoveeBlePacket::SetHumidifierMode(_)
                                             | GoveeBlePacket::SetHumidifierNightlight(_)
                                             | GoveeBlePacket::SetH7105FanSpeed(_)
-                                            | GoveeBlePacket::SetH7105FanAutoMode(_)
+                                            | GoveeBlePacket::SetH7105FanMode(_)
+                                            | GoveeBlePacket::SetH7105Oscillation(_)
                                             | GoveeBlePacket::SetH7105NightlightPower(_)
                                             | GoveeBlePacket::SetH7105NightlightBrightness(_)
                                             | GoveeBlePacket::SetH7105NightlightColor(_) => {
