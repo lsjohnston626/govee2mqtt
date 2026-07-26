@@ -187,7 +187,6 @@ pub async fn mqtt_h7105_oscillation(
     Ok(())
 }
 
-
 #[derive(Clone, Copy)]
 pub enum H7105OscillationSide {
     Left,
@@ -225,11 +224,7 @@ impl H7105OscillationAngle {
         ]
     }
 
-    fn new(
-        device: &ServiceDevice,
-        state: &StateHandle,
-        side: H7105OscillationSide,
-    ) -> Self {
+    fn new(device: &ServiceDevice, state: &StateHandle, side: H7105OscillationSide) -> Self {
         let side_name = side.topic_name();
         Self {
             config: NumberConfig {
@@ -247,7 +242,10 @@ impl H7105OscillationAngle {
                     icon: Some("mdi:angle-acute".to_string()),
                 },
                 command_topic: topic(device, &format!("oscillation-angle/{side_name}/command")),
-                state_topic: Some(topic(device, &format!("oscillation-angle/{side_name}/state"))),
+                state_topic: Some(topic(
+                    device,
+                    &format!("oscillation-angle/{side_name}/state"),
+                )),
                 min: Some(0.0),
                 max: Some(75.0),
                 step: 5.0,
@@ -300,10 +298,7 @@ impl H7105OscillationSpeed {
                     device_class: None,
                     origin: Origin::default(),
                     device: Device::for_device(device),
-                    unique_id: format!(
-                        "gv2mqtt-{}-oscillation-speed",
-                        topic_safe_id(device)
-                    ),
+                    unique_id: format!("gv2mqtt-{}-oscillation-speed", topic_safe_id(device)),
                     entity_category: None,
                     icon: Some("mdi:speedometer".to_string()),
                 },
@@ -363,10 +358,7 @@ impl H7105OscillationSymmetric {
                     device_class: None,
                     origin: Origin::default(),
                     device: Device::for_device(device),
-                    unique_id: format!(
-                        "gv2mqtt-{}-oscillation-symmetric",
-                        topic_safe_id(device)
-                    ),
+                    unique_id: format!("gv2mqtt-{}-oscillation-symmetric", topic_safe_id(device)),
                     entity_category: None,
                     icon: Some("mdi:arrow-left-right".to_string()),
                 },
@@ -461,7 +453,6 @@ pub async fn mqtt_h7105_oscillation_speed(
     state.poll_iot_api(&device).await?;
     Ok(())
 }
-
 
 pub async fn mqtt_h7105_oscillation_symmetric(
     Payload(payload): Payload<String>,

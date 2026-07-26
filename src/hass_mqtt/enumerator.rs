@@ -1,7 +1,9 @@
 use crate::hass_mqtt::base::{Device, EntityConfig, Origin};
 use crate::hass_mqtt::button::ButtonConfig;
 use crate::hass_mqtt::climate::TargetTemperatureEntity;
-use crate::hass_mqtt::fan::{H7105Fan, H7105OscillationAngle, H7105OscillationSpeed, H7105OscillationSymmetric};
+use crate::hass_mqtt::fan::{
+    H7105Fan, H7105OscillationAngle, H7105OscillationSpeed, H7105OscillationSymmetric,
+};
 use crate::hass_mqtt::humidifier::Humidifier;
 use crate::hass_mqtt::instance::EntityList;
 use crate::hass_mqtt::light::DeviceLight;

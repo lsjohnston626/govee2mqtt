@@ -1,8 +1,7 @@
 use crate::ble::{
     Base64HexBytes, H7105FanMode, H7105OscillationConfig, SetDevicePower, SetH7105FanMode,
-    SetH7105FanSpeed,
-    SetH7105NightlightBrightness, SetH7105NightlightColor, SetH7105NightlightPower,
-    SetH7105Oscillation, SetHumidifierMode, SetHumidifierNightlightParams,
+    SetH7105FanSpeed, SetH7105NightlightBrightness, SetH7105NightlightColor,
+    SetH7105NightlightPower, SetH7105Oscillation, SetHumidifierMode, SetHumidifierNightlightParams,
 };
 use crate::lan_api::{Client as LanClient, DeviceStatus as LanDeviceStatus, LanDevice};
 use crate::platform_api::{DeviceCapability, DeviceType, GoveeApiClient};

@@ -828,8 +828,7 @@ impl H7105OscillationConfig {
         );
         let span = self.left_degrees as u16 + self.right_degrees as u16;
         anyhow::ensure!(span > 0 && span <= 150, "invalid oscillation span");
-        let position =
-            900i16 + (self.left_degrees as i16 - self.right_degrees as i16) * 5;
+        let position = 900i16 + (self.left_degrees as i16 - self.right_degrees as i16) * 5;
         let position: u16 = position.try_into()?;
         let [position_hi, position_lo] = position.to_be_bytes();
         Ok([
@@ -1084,10 +1083,7 @@ mod test {
                 },
             )
             .unwrap(),
-            vec![
-                0x33, 0x05, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0x35,
-            ]
+            vec![0x33, 0x05, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x35,]
         );
         round_trip(
             "H7105",
