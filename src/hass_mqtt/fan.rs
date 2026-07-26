@@ -1288,7 +1288,7 @@ pub async fn mqtt_h7105_custom_control(
     packet[11..15].copy_from_slice(&oscillation_params[1..5]);
     restart_h7105_custom_program(&mut packets)?;
 
-    state.h7105_send_mode_config(&device, packets).await?;
+    state.h7105_write_custom_config(&device, packets).await?;
     state.poll_iot_api(&device).await?;
     Ok(())
 }
