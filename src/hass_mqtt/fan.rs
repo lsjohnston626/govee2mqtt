@@ -1220,7 +1220,7 @@ impl EntityInstance for H7105CustomSensor {
 #[derive(Deserialize)]
 pub struct H7105CustomControlParams {
     id: String,
-    stage: u8,
+    stage: String,
     field: String,
 }
 
@@ -1229,7 +1229,7 @@ pub async fn mqtt_h7105_custom_control(
     Params(H7105CustomControlParams { id, stage, field }): Params<H7105CustomControlParams>,
     State(state): State<StateHandle>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!((1..=3).contains(&stage), "invalid H7105 Custom stage");
+    let stage = parse_h7105_stage(&stage)?;
     let device = state.resolve_device_for_control(&id).await?;
     let mut custom = device.h7105_custom_stages()?[(stage - 1) as usize];
     let mut packets =
@@ -1292,6 +1292,12 @@ pub async fn mqtt_h7105_custom_control(
     Ok(())
 }
 
+fn parse_h7105_stage(stage: &str) -> anyhow::Result<u8> {
+    let stage = stage.parse()?;
+    anyhow::ensure!((1..=3).contains(&stage), "invalid H7105 Custom stage");
+    Ok(stage)
+}
+
 fn parse_on_off(payload: &str, name: &str) -> anyhow::Result<bool> {
     match payload {
         "ON" => Ok(true),
@@ -1339,5 +1345,14 @@ mod test {
         assert_eq!(parse_h7105_whole_number("25").unwrap(), 25);
         assert_eq!(parse_h7105_whole_number("25.0").unwrap(), 25);
         assert!(parse_h7105_whole_number("25.5").is_err());
+    }
+
+    #[test]
+    fn h7105_parses_custom_stage_route_parameters() {
+        assert_eq!(parse_h7105_stage("1").unwrap(), 1);
+        assert_eq!(parse_h7105_stage("3").unwrap(), 3);
+        assert!(parse_h7105_stage("0").is_err());
+        assert!(parse_h7105_stage("4").is_err());
+        assert!(parse_h7105_stage("invalid").is_err());
     }
 }
