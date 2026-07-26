@@ -778,10 +778,10 @@ pub async fn mqtt_h7105_auto_control(
         .ok_or_else(|| anyhow::anyhow!("H7105 Auto configuration unavailable"))?;
 
     match field.as_str() {
-        "on-temperature" => auto.on_temperature_c = payload.parse()?,
-        "keep-temperature" => auto.keep_temperature_c = payload.parse()?,
-        "on-speed" => auto.on_speed = payload.parse()?,
-        "keep-speed" => auto.keep_speed = payload.parse()?,
+        "on-temperature" => auto.on_temperature_c = parse_h7105_u8(&payload)?,
+        "keep-temperature" => auto.keep_temperature_c = parse_h7105_u8(&payload)?,
+        "on-speed" => auto.on_speed = parse_h7105_u8(&payload)?,
+        "keep-speed" => auto.keep_speed = parse_h7105_u8(&payload)?,
         "oscillation" => {
             auto.oscillating = parse_on_off(&payload, "Auto oscillation")?;
         }
@@ -1239,10 +1239,10 @@ pub async fn mqtt_h7105_custom_control(
         .ok_or_else(|| anyhow::anyhow!("H7105 Custom stage {stage} unavailable"))?;
 
     match field.as_str() {
-        "speed" => custom.speed = payload.parse()?,
+        "speed" => custom.speed = parse_h7105_u8(&payload)?,
         "duration" => {
             anyhow::ensure!(stage < 3, "H7105 Custom stage 3 is indefinite");
-            let duration: u16 = payload.parse()?;
+            let duration = parse_h7105_whole_number(&payload)?;
             anyhow::ensure!(duration <= 779, "H7105 Custom duration exceeds 12:59");
             custom.duration_minutes = Some(duration);
             custom.remaining_minutes = Some(duration);
@@ -1300,6 +1300,22 @@ fn parse_on_off(payload: &str, name: &str) -> anyhow::Result<bool> {
     }
 }
 
+fn parse_h7105_u8(payload: &str) -> anyhow::Result<u8> {
+    Ok(parse_h7105_whole_number(payload)?.try_into()?)
+}
+
+fn parse_h7105_whole_number(payload: &str) -> anyhow::Result<u16> {
+    let value: f32 = payload.parse()?;
+    anyhow::ensure!(
+        value.is_finite()
+            && value >= 0.0
+            && value <= u16::MAX as f32
+            && value.fract().abs() < f32::EPSILON,
+        "H7105 value must be a whole number"
+    );
+    Ok(value as u16)
+}
+
 fn parse_oscillation_speed(payload: &str) -> anyhow::Result<u8> {
     match payload {
         "Low" => Ok(1),
@@ -1312,4 +1328,16 @@ fn center_h7105_oscillation(config: &mut H7105OscillationConfig) {
     let half_span = (config.end_tenths - config.start_tenths) / 2;
     config.start_tenths = -half_span;
     config.end_tenths = half_span;
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn h7105_parses_home_assistant_number_payloads() {
+        assert_eq!(parse_h7105_whole_number("25").unwrap(), 25);
+        assert_eq!(parse_h7105_whole_number("25.0").unwrap(), 25);
+        assert!(parse_h7105_whole_number("25.5").is_err());
+    }
 }
