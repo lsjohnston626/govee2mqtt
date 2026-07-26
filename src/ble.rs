@@ -231,6 +231,49 @@ impl PacketManager {
             },
             H5086PowerReading::decode,
         ));
+        all_codecs.push(packet!(
+            &["H7105"], SetH7105FanSpeed, SetH7105FanSpeed,
+            0x33, 0x05, 0x01, speed,
+        ));
+        all_codecs.push(packet!(
+            &["H7105"], NotifyH7105FanSpeed, NotifyH7105FanSpeed,
+            0xaa, 0x05, 0x01, speed,
+        ));
+        all_codecs.push(packet!(
+            &["H7105"], H7105FanAutoMode, SetH7105FanAutoMode,
+            0x33, 0x05, 0x00, 0x02,
+        ));
+        all_codecs.push(packet!(
+            &["H7105"], H7105FanAutoMode, NotifyH7105FanAutoMode,
+            0xaa, 0x05, 0x00, 0x02,
+        ));
+        all_codecs.push(packet!(
+            &["H7105"], SetH7105NightlightPower, SetH7105NightlightPower,
+            0x3a, 0x1b, 0x01, 0x01, on,
+        ));
+        all_codecs.push(packet!(
+            &["H7105"], SetH7105NightlightBrightness, SetH7105NightlightBrightness,
+            0x3a, 0x1b, 0x01, 0x02, brightness,
+        ));
+        all_codecs.push(packet!(
+            &["H7105"], SetH7105NightlightColor, SetH7105NightlightColor,
+            0x3a, 0x1b, 0x05, 0x0d, r, g, b,
+        ));
+        all_codecs.push(packet!(
+            &["H7105"], NotifyH7105NightlightState, NotifyH7105NightlightState,
+            0xaa, 0x1b, 0x01, on, brightness,
+        ));
+        all_codecs.push(packet!(
+            &["H7105"], NotifyH7105NightlightColor, NotifyH7105NightlightColor,
+            0xaa, 0x1b, 0x05, 0x0d, r, g, b,
+        ));
+        all_codecs.push(PacketCodec::new(
+            &["H7105"],
+            |_state: &NotifyH7105Oscillation| {
+                anyhow::bail!("H7105 oscillation control is not validated")
+            },
+            NotifyH7105Oscillation::decode,
+        ));
         all_codecs.push(PacketCodec::new(
             &["Generic:Light"],
             SetSceneCode::encode,
@@ -238,7 +281,7 @@ impl PacketManager {
         ));
 
         all_codecs.push(packet!(
-            &["Generic:Light"],
+            &["Generic:Light", "H7105"],
             SetDevicePower,
             SetDevicePower,
             0x33,
@@ -487,10 +530,61 @@ impl H5086PowerReading {
     }
 }
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct SetH7105FanSpeed { pub speed: u8 }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct NotifyH7105FanSpeed { pub speed: u8 }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct H7105FanAutoMode;
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct SetH7105NightlightPower { pub on: bool }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct SetH7105NightlightBrightness { pub brightness: u8 }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct SetH7105NightlightColor { pub r: u8, pub g: u8, pub b: u8 }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct NotifyH7105NightlightState { pub on: bool, pub brightness: u8 }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct NotifyH7105NightlightColor { pub r: u8, pub g: u8, pub b: u8 }
+
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct NotifyH7105Oscillation { pub oscillating: bool }
+
+impl NotifyH7105Oscillation {
+    fn decode(data: &[u8]) -> anyhow::Result<GoveeBlePacket> {
+        anyhow::ensure!(data.len() == 20, "expected a 20-byte H7105 packet");
+        anyhow::ensure!(
+            data[0] == 0xaa && data[1] == 0x1d && matches!(data[2], 0x00 | 0x01),
+            "not an H7105 oscillation notification"
+        );
+        anyhow::ensure!(calculate_checksum(&data[..19]) == data[19], "invalid checksum");
+        Ok(GoveeBlePacket::NotifyH7105Oscillation(Self {
+            oscillating: data[2] == 0x01,
+        }))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GoveeBlePacket {
     Generic(HexBytes),
     H5086PowerReading(H5086PowerReading),
+    SetH7105FanSpeed(SetH7105FanSpeed),
+    NotifyH7105FanSpeed(NotifyH7105FanSpeed),
+    SetH7105FanAutoMode(H7105FanAutoMode),
+    NotifyH7105FanAutoMode(H7105FanAutoMode),
+    SetH7105NightlightPower(SetH7105NightlightPower),
+    SetH7105NightlightBrightness(SetH7105NightlightBrightness),
+    SetH7105NightlightColor(SetH7105NightlightColor),
+    NotifyH7105NightlightState(NotifyH7105NightlightState),
+    NotifyH7105NightlightColor(NotifyH7105NightlightColor),
+    NotifyH7105Oscillation(NotifyH7105Oscillation),
     #[allow(unused)] // can remove if/when SetSceneCode::decode has an impl
     SetSceneCode(SetSceneCode),
     SetDevicePower(SetDevicePower),
@@ -670,6 +764,27 @@ mod test {
             }
             .power_factor_percent(),
             100
+        );
+    }
+
+    #[test]
+    fn h7105_commands_and_notifications() {
+        round_trip("H7105", &SetDevicePower { on: true },
+            GoveeBlePacket::SetDevicePower(SetDevicePower { on: true }));
+        round_trip("H7105", &SetH7105FanSpeed { speed: 12 },
+            GoveeBlePacket::SetH7105FanSpeed(SetH7105FanSpeed { speed: 12 }));
+        round_trip("H7105", &H7105FanAutoMode,
+            GoveeBlePacket::SetH7105FanAutoMode(H7105FanAutoMode));
+        round_trip("H7105", &SetH7105NightlightPower { on: true },
+            GoveeBlePacket::SetH7105NightlightPower(SetH7105NightlightPower { on: true }));
+        round_trip("H7105", &SetH7105NightlightBrightness { brightness: 42 },
+            GoveeBlePacket::SetH7105NightlightBrightness(SetH7105NightlightBrightness { brightness: 42 }));
+        round_trip("H7105", &SetH7105NightlightColor { r: 1, g: 2, b: 3 },
+            GoveeBlePacket::SetH7105NightlightColor(SetH7105NightlightColor { r: 1, g: 2, b: 3 }));
+
+        assert_eq!(
+            MGR.decode_for_sku("H7105", &[0xaa, 0x05, 0x01, 0x07, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xa9]),
+            GoveeBlePacket::NotifyH7105FanSpeed(NotifyH7105FanSpeed { speed: 7 })
         );
     }
 

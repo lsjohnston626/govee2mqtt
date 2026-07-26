@@ -1,4 +1,8 @@
-use crate::ble::{Base64HexBytes, SetHumidifierMode, SetHumidifierNightlightParams};
+use crate::ble::{
+    Base64HexBytes, H7105FanAutoMode, SetDevicePower, SetH7105FanSpeed,
+    SetH7105NightlightBrightness, SetH7105NightlightColor, SetH7105NightlightPower,
+    SetHumidifierMode, SetHumidifierNightlightParams,
+};
 use crate::lan_api::{Client as LanClient, DeviceStatus as LanDeviceStatus, LanDevice};
 use crate::platform_api::{DeviceCapability, DeviceType, GoveeApiClient};
 use crate::service::coordinator::Coordinator;
@@ -305,7 +309,7 @@ impl State {
         on: bool,
     ) -> anyhow::Result<()> {
         if self
-            .try_humidifier_set_nightlight(device, |p| p.on = on)
+            .try_set_nightlight(device, |p| p.on = on)
             .await?
         {
             return Ok(());
@@ -387,7 +391,7 @@ impl State {
         percent: u8,
     ) -> anyhow::Result<()> {
         if self
-            .try_humidifier_set_nightlight(device, |p| {
+            .try_set_nightlight(device, |p| {
                 p.brightness = percent;
                 p.on = true;
             })
@@ -463,27 +467,105 @@ impl State {
         anyhow::bail!("Unable to control color temperature for {device}");
     }
 
-    // FIXME: this function probably shouldn't exist here
-    async fn try_humidifier_set_nightlight<F: Fn(&mut SetHumidifierNightlightParams)>(
+    async fn try_set_nightlight<F: Fn(&mut SetHumidifierNightlightParams)>(
         self: &Arc<Self>,
         device: &Device,
         apply: F,
     ) -> anyhow::Result<bool> {
-        let mut params: SetHumidifierNightlightParams =
-            device.nightlight_state.unwrap_or_default().into();
-        (apply)(&mut params);
+        let current = device.nightlight_state.unwrap_or_default();
+        let mut desired: SetHumidifierNightlightParams = current.into();
+        (apply)(&mut desired);
 
-        if let Ok(command) = Base64HexBytes::encode_for_sku(&device.sku, &params) {
-            if let Some(iot) = self.get_iot_client().await {
-                if let Some(info) = &device.undoc_device_info {
-                    log::info!("Using IoT API to set {device} color");
-                    iot.send_real(&info.entry, command.base64()).await?;
-                    return Ok(true);
-                }
+        let Some(iot) = self.get_iot_client().await else {
+            return Ok(false);
+        };
+        let Some(info) = &device.undoc_device_info else {
+            return Ok(false);
+        };
+
+        if device.sku == "H7105" {
+            let mut commands = vec![];
+            if desired.on != current.on {
+                commands.extend(
+                    Base64HexBytes::encode_for_sku(
+                        &device.sku,
+                        &SetH7105NightlightPower { on: desired.on },
+                    )?
+                    .base64(),
+                );
             }
+            if desired.brightness != current.brightness {
+                commands.extend(
+                    Base64HexBytes::encode_for_sku(
+                        &device.sku,
+                        &SetH7105NightlightBrightness {
+                            brightness: desired.brightness,
+                        },
+                    )?
+                    .base64(),
+                );
+            }
+            if (desired.r, desired.g, desired.b) != (current.r, current.g, current.b) {
+                commands.extend(
+                    Base64HexBytes::encode_for_sku(
+                        &device.sku,
+                        &SetH7105NightlightColor {
+                            r: desired.r,
+                            g: desired.g,
+                            b: desired.b,
+                        },
+                    )?
+                    .base64(),
+                );
+            }
+            if !commands.is_empty() {
+                log::info!("Using IoT API to set {device} night light");
+                iot.send_multi_sync(&info.entry, commands).await?;
+            }
+            return Ok(true);
+        }
+
+        if let Ok(command) = Base64HexBytes::encode_for_sku(&device.sku, &desired) {
+            log::info!("Using IoT API to set {device} night light");
+            iot.send_real(&info.entry, command.base64()).await?;
+            return Ok(true);
         }
 
         Ok(false)
+    }
+
+    pub async fn h7105_set_power(
+        self: &Arc<Self>,
+        device: &Device,
+        on: bool,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(device.sku == "H7105", "not an H7105 device");
+        let command = Base64HexBytes::encode_for_sku(&device.sku, &SetDevicePower { on })?;
+        let iot = self.get_iot_client().await.context("IoT client unavailable")?;
+        let info = device.undoc_device_info.as_ref().context("missing private device metadata")?;
+        iot.send_real(&info.entry, command.base64()).await
+    }
+
+    pub async fn h7105_set_speed(
+        self: &Arc<Self>,
+        device: &Device,
+        speed: u8,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!((1..=12).contains(&speed), "H7105 speed must be 1 through 12");
+        let command = Base64HexBytes::encode_for_sku(&device.sku, &SetH7105FanSpeed { speed })?;
+        let iot = self.get_iot_client().await.context("IoT client unavailable")?;
+        let info = device.undoc_device_info.as_ref().context("missing private device metadata")?;
+        iot.send_real(&info.entry, command.base64()).await
+    }
+
+    pub async fn h7105_set_auto(
+        self: &Arc<Self>,
+        device: &Device,
+    ) -> anyhow::Result<()> {
+        let command = Base64HexBytes::encode_for_sku(&device.sku, &H7105FanAutoMode)?;
+        let iot = self.get_iot_client().await.context("IoT client unavailable")?;
+        let info = device.undoc_device_info.as_ref().context("missing private device metadata")?;
+        iot.send_real(&info.entry, command.base64()).await
     }
 
     pub async fn humidifier_set_parameter(
@@ -524,7 +606,7 @@ impl State {
         b: u8,
     ) -> anyhow::Result<()> {
         if self
-            .try_humidifier_set_nightlight(device, |p| {
+            .try_set_nightlight(device, |p| {
                 p.r = r;
                 p.g = g;
                 p.b = b;

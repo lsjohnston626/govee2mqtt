@@ -11,6 +11,13 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
 
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct H7105FanState {
+    pub speed: Option<u8>,
+    pub auto: bool,
+    pub oscillating: Option<bool>,
+}
+
 #[derive(Default, Clone, Debug)]
 pub struct Device {
     pub sku: String,
@@ -39,6 +46,7 @@ pub struct Device {
     pub h5086_power_reading: Option<H5086PowerReading>,
     pub last_h5086_power_reading_update: Option<DateTime<Utc>>,
 
+    pub h7105_fan_state: H7105FanState,
     pub nightlight_state: Option<NotifyHumidifierNightlightParams>,
     pub target_humidity_percent: Option<u8>,
     pub humidifier_work_mode: Option<u8>,
@@ -159,7 +167,7 @@ impl Device {
     }
 
     pub fn preferred_poll_interval(&self) -> chrono::Duration {
-        if self.sku == "H5086" {
+        if matches!(self.sku.as_str(), "H5086" | "H7105") {
             return chrono::Duration::seconds(60);
         }
 
@@ -186,6 +194,19 @@ impl Device {
 
     pub fn set_nightlight_state(&mut self, params: NotifyHumidifierNightlightParams) {
         self.nightlight_state.replace(params);
+    }
+
+    pub fn set_h7105_speed(&mut self, speed: u8) {
+        self.h7105_fan_state.speed.replace(speed);
+        self.h7105_fan_state.auto = false;
+    }
+
+    pub fn set_h7105_auto_mode(&mut self) {
+        self.h7105_fan_state.auto = true;
+    }
+
+    pub fn set_h7105_oscillation(&mut self, oscillating: bool) {
+        self.h7105_fan_state.oscillating.replace(oscillating);
     }
 
     pub fn set_target_humidity(&mut self, percent: u8) {
@@ -433,7 +454,7 @@ impl Device {
 
         let device_type = self.device_type();
         match (device_type, self.sku.as_str()) {
-            (_, "H5086" | "H7160") => false,
+            (_, "H5086" | "H7105" | "H7160") => false,
             (DeviceType::Humidifier, _) => true,
             (DeviceType::Light, _) => false,
             (DeviceType::Kettle, _) => true,
@@ -452,7 +473,7 @@ impl Device {
         let device_type = self.device_type();
         matches!(
             (device_type, self.sku.as_str()),
-            (_, "H5086" | "H7160") | (DeviceType::Light, _)
+            (_, "H5086" | "H7105" | "H7160") | (DeviceType::Light, _)
         )
     }
 
