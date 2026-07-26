@@ -240,14 +240,12 @@ impl PacketManager {
             0x01,
             speed,
         ));
-        all_codecs.push(packet!(
+        all_codecs.push(PacketCodec::new(
             &["H7105"],
-            NotifyH7105FanSpeed,
-            NotifyH7105FanSpeed,
-            0xaa,
-            0x05,
-            0x01,
-            speed,
+            |_speed: &NotifyH7105FanSpeed| {
+                anyhow::bail!("H7105 fan speeds are device notifications")
+            },
+            NotifyH7105FanSpeed::decode,
         ));
         all_codecs.push(packet!(
             &["H7105"],
@@ -594,6 +592,24 @@ pub struct NotifyH7105FanSpeed {
     pub speed: u8,
 }
 
+impl NotifyH7105FanSpeed {
+    fn decode(data: &[u8]) -> anyhow::Result<GoveeBlePacket> {
+        anyhow::ensure!(data.len() == 20, "expected a 20-byte H7105 packet");
+        anyhow::ensure!(
+            data[0..3] == [0xaa, 0x05, 0x01],
+            "not an H7105 fan speed notification"
+        );
+        anyhow::ensure!(
+            calculate_checksum(&data[..19]) == data[19],
+            "invalid checksum"
+        );
+        anyhow::ensure!((1..=12).contains(&data[3]), "invalid H7105 fan speed");
+        Ok(GoveeBlePacket::NotifyH7105FanSpeed(Self {
+            speed: data[3],
+        }))
+    }
+}
+
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct SetH7105FanAutoMode;
 
@@ -889,6 +905,16 @@ mod test {
                 &[0xaa, 0x05, 0x01, 0x07, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xa9]
             ),
             GoveeBlePacket::NotifyH7105FanSpeed(NotifyH7105FanSpeed { speed: 7 })
+        );
+        assert_eq!(
+            MGR.decode_for_sku(
+                "H7105",
+                &[
+                    0xaa, 0x05, 0x01, 0x0c, 0x00, 0x03, 0x5a, 0x04, 0xb0, 0x01,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e,
+                ]
+            ),
+            GoveeBlePacket::NotifyH7105FanSpeed(NotifyH7105FanSpeed { speed: 12 })
         );
     }
 
