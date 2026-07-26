@@ -213,10 +213,7 @@ impl Device {
         let Some(mode_index) = data[2].checked_sub(1).filter(|index| *index < 5) else {
             return;
         };
-        let line_index = if matches!(
-            data[2],
-            value if value == H7105FanMode::Custom as u8 || value == H7105FanMode::Sleep as u8
-        ) {
+        let line_index = if data[2] == H7105FanMode::Sleep as u8 {
             data[3] as usize
         } else {
             0
@@ -670,19 +667,25 @@ mod test {
     }
 
     #[test]
-    fn h7105_caches_all_custom_mode_stages() {
+    fn h7105_caches_custom_activation_and_sleep_fragments() {
         let mut device = Device::new("H7105", "AA:BB:CC:DD:EE:FF");
-        for stage in 0..3u8 {
+        let mut custom = [0u8; 20];
+        custom[0..4].copy_from_slice(&[0xaa, 0x05, H7105FanMode::Custom as u8, 2]);
+        device.cache_h7105_mode_config(&custom);
+        for line in 0..3u8 {
             let mut packet = [0u8; 20];
-            packet[0..4].copy_from_slice(&[0xaa, 0x05, H7105FanMode::Custom as u8, stage]);
+            packet[0..4].copy_from_slice(&[0xaa, 0x05, H7105FanMode::Sleep as u8, line]);
             device.cache_h7105_mode_config(&packet);
         }
 
-        let cached =
+        let custom_cached =
             device.h7105_fan_state.mode_config_packets[(H7105FanMode::Custom as usize) - 1];
-        assert_eq!(cached[0].unwrap()[3], 0);
-        assert_eq!(cached[1].unwrap()[3], 1);
-        assert_eq!(cached[2].unwrap()[3], 2);
+        assert_eq!(custom_cached[0].unwrap()[3], 2);
+        let sleep_cached =
+            device.h7105_fan_state.mode_config_packets[(H7105FanMode::Sleep as usize) - 1];
+        assert_eq!(sleep_cached[0].unwrap()[3], 0);
+        assert_eq!(sleep_cached[1].unwrap()[3], 1);
+        assert_eq!(sleep_cached[2].unwrap()[3], 2);
     }
 
     #[test]
