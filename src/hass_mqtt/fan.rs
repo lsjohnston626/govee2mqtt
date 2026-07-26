@@ -179,9 +179,7 @@ pub async fn mqtt_h7105_oscillation(
         _ => anyhow::bail!("invalid H7105 oscillation payload {payload:?}"),
     };
     let device = state.resolve_device_for_control(&id).await?;
-    state
-        .h7105_set_oscillation(&device, oscillating)
-        .await?;
+    state.h7105_set_oscillation(&device, oscillating).await?;
     state.poll_iot_api(&device).await?;
     Ok(())
 }
