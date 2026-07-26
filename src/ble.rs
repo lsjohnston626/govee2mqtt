@@ -604,9 +604,7 @@ impl NotifyH7105FanSpeed {
             "invalid checksum"
         );
         anyhow::ensure!((1..=12).contains(&data[3]), "invalid H7105 fan speed");
-        Ok(GoveeBlePacket::NotifyH7105FanSpeed(Self {
-            speed: data[3],
-        }))
+        Ok(GoveeBlePacket::NotifyH7105FanSpeed(Self { speed: data[3] }))
     }
 }
 
@@ -910,8 +908,8 @@ mod test {
             MGR.decode_for_sku(
                 "H7105",
                 &[
-                    0xaa, 0x05, 0x01, 0x0c, 0x00, 0x03, 0x5a, 0x04, 0xb0, 0x01,
-                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e,
+                    0xaa, 0x05, 0x01, 0x0c, 0x00, 0x03, 0x5a, 0x04, 0xb0, 0x01, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x4e,
                 ]
             ),
             GoveeBlePacket::NotifyH7105FanSpeed(NotifyH7105FanSpeed { speed: 12 })
