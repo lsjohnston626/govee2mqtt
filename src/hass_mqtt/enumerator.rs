@@ -1,7 +1,7 @@
 use crate::hass_mqtt::base::{Device, EntityConfig, Origin};
 use crate::hass_mqtt::button::ButtonConfig;
 use crate::hass_mqtt::climate::TargetTemperatureEntity;
-use crate::hass_mqtt::fan::H7105Fan;
+use crate::hass_mqtt::fan::{H7105Fan, H7105OscillationAngle, H7105OscillationSpeed, H7105OscillationSymmetric};
 use crate::hass_mqtt::humidifier::Humidifier;
 use crate::hass_mqtt::instance::EntityList;
 use crate::hass_mqtt::light::DeviceLight;
@@ -161,6 +161,11 @@ pub async fn enumerate_entities_for_device(
 
     if d.sku == "H7105" {
         entities.add(H7105Fan::new(d, state));
+        for angle in H7105OscillationAngle::all(d, state) {
+            entities.add(angle);
+        }
+        entities.add(H7105OscillationSpeed::new(d, state));
+        entities.add(H7105OscillationSymmetric::new(d, state));
     }
 
     if d.sku == "H5086" {

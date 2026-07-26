@@ -247,14 +247,10 @@ impl PacketManager {
             },
             NotifyH7105FanSpeed::decode,
         ));
-        all_codecs.push(packet!(
+        all_codecs.push(PacketCodec::new(
             &["H7105"],
-            SetH7105FanMode,
-            SetH7105FanMode,
-            0x33,
-            0x05,
-            0x00,
-            mode,
+            SetH7105FanMode::encode,
+            SetH7105FanMode::decode,
         ));
         all_codecs.push(PacketCodec::new(
             &["H7105"],
@@ -680,6 +676,27 @@ pub struct SetH7105FanMode {
     pub mode: H7105FanMode,
 }
 
+impl SetH7105FanMode {
+    fn encode(&self) -> anyhow::Result<Vec<u8>> {
+        Ok(finish(vec![0x33, 0x05, 0x00, self.mode as u8]))
+    }
+
+    fn decode(data: &[u8]) -> anyhow::Result<GoveeBlePacket> {
+        anyhow::ensure!(data.len() == 20, "expected a 20-byte H7105 packet");
+        anyhow::ensure!(
+            data[0..3] == [0x33, 0x05, 0x00],
+            "not an H7105 fan mode command"
+        );
+        anyhow::ensure!(
+            calculate_checksum(&data[..19]) == data[19],
+            "invalid checksum"
+        );
+        Ok(GoveeBlePacket::SetH7105FanMode(Self {
+            mode: data[3].try_into()?,
+        }))
+    }
+}
+
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct NotifyH7105FanMode {
     pub mode: H7105FanMode,
@@ -767,6 +784,62 @@ impl SetH7105Oscillation {
 pub struct NotifyH7105Oscillation {
     pub oscillating: bool,
     pub params: [u8; 5],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct H7105OscillationConfig {
+    pub speed: u8,
+    pub left_degrees: u8,
+    pub right_degrees: u8,
+    pub flags: u8,
+}
+
+impl H7105OscillationConfig {
+    pub fn from_params(params: [u8; 5]) -> anyhow::Result<Self> {
+        let speed = params[0];
+        let span = params[1] as i16;
+        let position = u16::from_be_bytes([params[2], params[3]]) as i16;
+        let center_tenths = 900 - position;
+        let left_tenths = span * 5 - center_tenths;
+        let right_tenths = span * 5 + center_tenths;
+        anyhow::ensure!(matches!(speed, 1 | 3), "invalid oscillation speed");
+        anyhow::ensure!(matches!(params[4], 0 | 1), "invalid symmetry flag");
+        anyhow::ensure!(
+            left_tenths >= 0 && right_tenths >= 0,
+            "invalid oscillation range"
+        );
+        anyhow::ensure!(
+            left_tenths % 10 == 0 && right_tenths % 10 == 0,
+            "oscillation range is not in whole degrees"
+        );
+        Ok(Self {
+            speed,
+            left_degrees: (left_tenths / 10).try_into()?,
+            right_degrees: (right_tenths / 10).try_into()?,
+            flags: params[4],
+        })
+    }
+
+    pub fn to_params(self) -> anyhow::Result<[u8; 5]> {
+        anyhow::ensure!(matches!(self.speed, 1 | 3), "invalid oscillation speed");
+        anyhow::ensure!(
+            self.left_degrees <= 75 && self.right_degrees <= 75,
+            "oscillation angles must be between 0 and 75 degrees"
+        );
+        let span = self.left_degrees as u16 + self.right_degrees as u16;
+        anyhow::ensure!(span > 0 && span <= 150, "invalid oscillation span");
+        let position =
+            900i16 + (self.left_degrees as i16 - self.right_degrees as i16) * 5;
+        let position: u16 = position.try_into()?;
+        let [position_hi, position_lo] = position.to_be_bytes();
+        Ok([
+            self.speed,
+            span.try_into()?,
+            position_hi,
+            position_lo,
+            self.flags,
+        ])
+    }
 }
 
 impl NotifyH7105Oscillation {
@@ -1003,6 +1076,19 @@ mod test {
                 GoveeBlePacket::SetH7105FanMode(SetH7105FanMode { mode }),
             );
         }
+        assert_eq!(
+            MGR.encode_for_sku(
+                "H7105",
+                &SetH7105FanMode {
+                    mode: H7105FanMode::Auto,
+                },
+            )
+            .unwrap(),
+            vec![
+                0x33, 0x05, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0x35,
+            ]
+        );
         round_trip(
             "H7105",
             &SetH7105NightlightPower { on: true },
@@ -1071,6 +1157,20 @@ mod test {
                 params: [0x03, 0x5a, 0x04, 0xb0, 0x01],
             })
         );
+        let old_range = H7105OscillationConfig::from_params([3, 90, 4, 176, 1]).unwrap();
+        assert_eq!(old_range.left_degrees, 75);
+        assert_eq!(old_range.right_degrees, 15);
+        assert_eq!(old_range.to_params().unwrap(), [3, 90, 4, 176, 1]);
+
+        let new_range = H7105OscillationConfig::from_params([3, 75, 3, 57, 1]).unwrap();
+        assert_eq!(new_range.left_degrees, 30);
+        assert_eq!(new_range.right_degrees, 45);
+        assert_eq!(new_range.to_params().unwrap(), [3, 75, 3, 57, 1]);
+
+        let symmetric_low = H7105OscillationConfig::from_params([1, 50, 3, 132, 0]).unwrap();
+        assert_eq!(symmetric_low.left_degrees, 25);
+        assert_eq!(symmetric_low.right_degrees, 25);
+        assert_eq!(symmetric_low.to_params().unwrap(), [1, 50, 3, 132, 0]);
     }
 
     #[test]

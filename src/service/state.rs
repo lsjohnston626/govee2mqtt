@@ -1,5 +1,6 @@
 use crate::ble::{
-    Base64HexBytes, H7105FanMode, SetDevicePower, SetH7105FanMode, SetH7105FanSpeed,
+    Base64HexBytes, H7105FanMode, H7105OscillationConfig, SetDevicePower, SetH7105FanMode,
+    SetH7105FanSpeed,
     SetH7105NightlightBrightness, SetH7105NightlightColor, SetH7105NightlightPower,
     SetH7105Oscillation, SetHumidifierMode, SetHumidifierNightlightParams,
 };
@@ -593,16 +594,28 @@ impl State {
         device: &Device,
         oscillating: bool,
     ) -> anyhow::Result<()> {
+        let config = H7105OscillationConfig::from_params(
+            device
+                .h7105_fan_state
+                .oscillation_params
+                .context("H7105 oscillation parameters unavailable; wait for a device poll")?,
+        )?;
+        self.h7105_set_oscillation_config(device, oscillating, config)
+            .await
+    }
+
+    pub async fn h7105_set_oscillation_config(
+        self: &Arc<Self>,
+        device: &Device,
+        oscillating: bool,
+        config: H7105OscillationConfig,
+    ) -> anyhow::Result<()> {
         anyhow::ensure!(device.sku == "H7105", "not an H7105 device");
-        let params = device
-            .h7105_fan_state
-            .oscillation_params
-            .context("H7105 oscillation parameters unavailable; wait for a device poll")?;
         let command = Base64HexBytes::encode_for_sku(
             &device.sku,
             &SetH7105Oscillation {
                 oscillating,
-                params,
+                params: config.to_params()?,
             },
         )?;
         let iot = self

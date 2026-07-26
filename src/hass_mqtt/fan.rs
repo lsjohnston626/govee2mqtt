@@ -1,6 +1,9 @@
-use crate::ble::H7105FanMode;
+use crate::ble::{H7105FanMode, H7105OscillationConfig};
 use crate::hass_mqtt::base::{Device, EntityConfig, Origin};
 use crate::hass_mqtt::instance::{publish_entity_config, EntityInstance};
+use crate::hass_mqtt::number::NumberConfig;
+use crate::hass_mqtt::select::SelectConfig;
+use crate::hass_mqtt::switch::SwitchConfig;
 use crate::service::device::Device as ServiceDevice;
 use crate::service::hass::{availability_topic, topic_safe_id, HassClient};
 use crate::service::state::StateHandle;
@@ -180,6 +183,310 @@ pub async fn mqtt_h7105_oscillation(
     };
     let device = state.resolve_device_for_control(&id).await?;
     state.h7105_set_oscillation(&device, oscillating).await?;
+    state.poll_iot_api(&device).await?;
+    Ok(())
+}
+
+
+#[derive(Clone, Copy)]
+pub enum H7105OscillationSide {
+    Left,
+    Right,
+}
+
+impl H7105OscillationSide {
+    fn topic_name(self) -> &'static str {
+        match self {
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Left => "Oscillation Left Angle",
+            Self::Right => "Oscillation Right Angle",
+        }
+    }
+}
+
+pub struct H7105OscillationAngle {
+    config: NumberConfig,
+    device_id: String,
+    state: StateHandle,
+    side: H7105OscillationSide,
+}
+
+impl H7105OscillationAngle {
+    pub fn all(device: &ServiceDevice, state: &StateHandle) -> [Self; 2] {
+        [
+            Self::new(device, state, H7105OscillationSide::Left),
+            Self::new(device, state, H7105OscillationSide::Right),
+        ]
+    }
+
+    fn new(
+        device: &ServiceDevice,
+        state: &StateHandle,
+        side: H7105OscillationSide,
+    ) -> Self {
+        let side_name = side.topic_name();
+        Self {
+            config: NumberConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some(side.display_name().to_string()),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!(
+                        "gv2mqtt-{}-oscillation-{side_name}-angle",
+                        topic_safe_id(device)
+                    ),
+                    entity_category: None,
+                    icon: Some("mdi:angle-acute".to_string()),
+                },
+                command_topic: topic(device, &format!("oscillation-angle/{side_name}/command")),
+                state_topic: Some(topic(device, &format!("oscillation-angle/{side_name}/state"))),
+                min: Some(0.0),
+                max: Some(75.0),
+                step: 5.0,
+                unit_of_measurement: Some("deg"),
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+            side,
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105OscillationAngle {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        if let Some(params) = device.h7105_fan_state.oscillation_params {
+            let config = H7105OscillationConfig::from_params(params)?;
+            let value = match self.side {
+                H7105OscillationSide::Left => config.left_degrees,
+                H7105OscillationSide::Right => config.right_degrees,
+            };
+            self.config.notify_state(client, &value.to_string()).await?;
+        }
+        Ok(())
+    }
+}
+
+pub struct H7105OscillationSpeed {
+    config: SelectConfig,
+    device_id: String,
+    state: StateHandle,
+}
+
+impl H7105OscillationSpeed {
+    pub fn new(device: &ServiceDevice, state: &StateHandle) -> Self {
+        Self {
+            config: SelectConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some("Oscillation Speed".to_string()),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!(
+                        "gv2mqtt-{}-oscillation-speed",
+                        topic_safe_id(device)
+                    ),
+                    entity_category: None,
+                    icon: Some("mdi:speedometer".to_string()),
+                },
+                command_topic: topic(device, "oscillation/speed/command"),
+                state_topic: topic(device, "oscillation/speed/state"),
+                options: vec!["Low".to_string(), "High".to_string()],
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105OscillationSpeed {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        if let Some(params) = device.h7105_fan_state.oscillation_params {
+            let speed = H7105OscillationConfig::from_params(params)?.speed;
+            client
+                .publish(&self.config.state_topic, oscillation_speed_name(speed)?)
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+fn oscillation_speed_name(speed: u8) -> anyhow::Result<&'static str> {
+    match speed {
+        1 => Ok("Low"),
+        3 => Ok("High"),
+        _ => anyhow::bail!("invalid H7105 oscillation speed {speed}"),
+    }
+}
+
+pub struct H7105OscillationSymmetric {
+    config: SwitchConfig,
+    device_id: String,
+    state: StateHandle,
+}
+
+impl H7105OscillationSymmetric {
+    pub fn new(device: &ServiceDevice, state: &StateHandle) -> Self {
+        Self {
+            config: SwitchConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some("Symmetric Oscillation".to_string()),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!(
+                        "gv2mqtt-{}-oscillation-symmetric",
+                        topic_safe_id(device)
+                    ),
+                    entity_category: None,
+                    icon: Some("mdi:arrow-left-right".to_string()),
+                },
+                command_topic: topic(device, "oscillation/symmetric/command"),
+                state_topic: topic(device, "oscillation/symmetric/state"),
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105OscillationSymmetric {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        if let Some(params) = device.h7105_fan_state.oscillation_params {
+            let symmetric = H7105OscillationConfig::from_params(params)?.flags == 0;
+            client
+                .publish(
+                    &self.config.state_topic,
+                    if symmetric { "ON" } else { "OFF" },
+                )
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FanOscillationAngleParams {
+    id: String,
+    side: String,
+}
+
+pub async fn mqtt_h7105_oscillation_angle(
+    Payload(value): Payload<u8>,
+    Params(FanOscillationAngleParams { id, side }): Params<FanOscillationAngleParams>,
+    State(state): State<StateHandle>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(value <= 75 && value % 5 == 0, "invalid H7105 angle");
+    let device = state.resolve_device_for_control(&id).await?;
+    let fan = device.h7105_fan_state;
+    let mut config = H7105OscillationConfig::from_params(
+        fan.oscillation_params
+            .ok_or_else(|| anyhow::anyhow!("H7105 oscillation parameters unavailable"))?,
+    )?;
+    match side.as_str() {
+        "left" => config.left_degrees = value,
+        "right" => config.right_degrees = value,
+        _ => anyhow::bail!("invalid H7105 oscillation side {side:?}"),
+    }
+    if config.flags == 0 {
+        config.left_degrees = value;
+        config.right_degrees = value;
+    }
+    state
+        .h7105_set_oscillation_config(&device, fan.oscillating.unwrap_or(false), config)
+        .await?;
+    state.poll_iot_api(&device).await?;
+    Ok(())
+}
+
+pub async fn mqtt_h7105_oscillation_speed(
+    Payload(payload): Payload<String>,
+    Params(FanId { id }): Params<FanId>,
+    State(state): State<StateHandle>,
+) -> anyhow::Result<()> {
+    let speed = match payload.as_str() {
+        "Low" => 1,
+        "High" => 3,
+        _ => anyhow::bail!("invalid H7105 oscillation speed {payload:?}"),
+    };
+    let device = state.resolve_device_for_control(&id).await?;
+    let fan = device.h7105_fan_state;
+    let mut config = H7105OscillationConfig::from_params(
+        fan.oscillation_params
+            .ok_or_else(|| anyhow::anyhow!("H7105 oscillation parameters unavailable"))?,
+    )?;
+    config.speed = speed;
+    state
+        .h7105_set_oscillation_config(&device, fan.oscillating.unwrap_or(false), config)
+        .await?;
+    state.poll_iot_api(&device).await?;
+    Ok(())
+}
+
+
+pub async fn mqtt_h7105_oscillation_symmetric(
+    Payload(payload): Payload<String>,
+    Params(FanId { id }): Params<FanId>,
+    State(state): State<StateHandle>,
+) -> anyhow::Result<()> {
+    let symmetric = match payload.as_str() {
+        "ON" => true,
+        "OFF" => false,
+        _ => anyhow::bail!("invalid H7105 symmetry payload {payload:?}"),
+    };
+    let device = state.resolve_device_for_control(&id).await?;
+    let fan = device.h7105_fan_state;
+    let mut config = H7105OscillationConfig::from_params(
+        fan.oscillation_params
+            .ok_or_else(|| anyhow::anyhow!("H7105 oscillation parameters unavailable"))?,
+    )?;
+    config.flags = if symmetric { 0 } else { 1 };
+    if symmetric {
+        config.left_degrees = 25;
+        config.right_degrees = 25;
+    }
+    state
+        .h7105_set_oscillation_config(&device, fan.oscillating.unwrap_or(false), config)
+        .await?;
     state.poll_iot_api(&device).await?;
     Ok(())
 }
