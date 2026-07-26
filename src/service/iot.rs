@@ -442,6 +442,9 @@ async fn run_iot_subscriber(
                                                     mode, param,
                                                 );
                                             }
+                                            GoveeBlePacket::H5086PowerReading(reading) => {
+                                                device.set_h5086_power_reading(reading);
+                                            }
                                             GoveeBlePacket::Generic(_) => {
                                                 // Ignore packets that we can't decode
                                             }
