@@ -1,5 +1,5 @@
 use crate::ble::{
-    Base64HexBytes, H7105FanMode, H7105OscillationConfig, SetDevicePower, SetH7105FanMode,
+    Base64HexBytes, H7105FanMode, H7105OscillationConfig, SetDevicePower,
     SetH7105FanSpeed, SetH7105NightlightBrightness, SetH7105NightlightColor,
     SetH7105NightlightPower, SetH7105Oscillation, SetHumidifierMode, SetHumidifierNightlightParams,
 };
@@ -576,7 +576,11 @@ impl State {
         mode: H7105FanMode,
     ) -> anyhow::Result<()> {
         anyhow::ensure!(device.sku == "H7105", "not an H7105 device");
-        let command = Base64HexBytes::encode_for_sku(&device.sku, &SetH7105FanMode { mode })?;
+        let packets = device.h7105_fan_state.mode_config_packets[(mode as usize) - 1];
+        anyhow::ensure!(
+            packets[0].is_some(),
+            "H7105 {mode:?} configuration unavailable; wait for a device poll"
+        );
         let iot = self
             .get_iot_client()
             .await
@@ -585,7 +589,13 @@ impl State {
             .undoc_device_info
             .as_ref()
             .context("missing private device metadata")?;
-        iot.send_real(&info.entry, command.base64()).await
+        for packet in packets.into_iter().flatten() {
+            let mut body = packet[..19].to_vec();
+            body[0] = 0x3a;
+            let command = Base64HexBytes::with_bytes(body);
+            iot.send_multi_sync(&info.entry, command.base64()).await?;
+        }
+        Ok(())
     }
 
     pub async fn h7105_set_oscillation(

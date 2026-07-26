@@ -189,22 +189,22 @@ pub async fn mqtt_h7105_oscillation(
 
 #[derive(Clone, Copy)]
 pub enum H7105OscillationSide {
-    Left,
-    Right,
+    Start,
+    End,
 }
 
 impl H7105OscillationSide {
     fn topic_name(self) -> &'static str {
         match self {
-            Self::Left => "left",
-            Self::Right => "right",
+            Self::Start => "left",
+            Self::End => "right",
         }
     }
 
     fn display_name(self) -> &'static str {
         match self {
-            Self::Left => "Oscillation Left Angle",
-            Self::Right => "Oscillation Right Angle",
+            Self::Start => "Oscillation Start Angle",
+            Self::End => "Oscillation End Angle",
         }
     }
 }
@@ -219,8 +219,8 @@ pub struct H7105OscillationAngle {
 impl H7105OscillationAngle {
     pub fn all(device: &ServiceDevice, state: &StateHandle) -> [Self; 2] {
         [
-            Self::new(device, state, H7105OscillationSide::Left),
-            Self::new(device, state, H7105OscillationSide::Right),
+            Self::new(device, state, H7105OscillationSide::Start),
+            Self::new(device, state, H7105OscillationSide::End),
         ]
     }
 
@@ -246,7 +246,7 @@ impl H7105OscillationAngle {
                     device,
                     &format!("oscillation-angle/{side_name}/state"),
                 )),
-                min: Some(0.0),
+                min: Some(-75.0),
                 max: Some(75.0),
                 step: 5.0,
                 unit_of_measurement: Some("deg"),
@@ -273,8 +273,8 @@ impl EntityInstance for H7105OscillationAngle {
         if let Some(params) = device.h7105_fan_state.oscillation_params {
             let config = H7105OscillationConfig::from_params(params)?;
             let value = match self.side {
-                H7105OscillationSide::Left => config.left_degrees,
-                H7105OscillationSide::Right => config.right_degrees,
+                H7105OscillationSide::Start => config.start_degrees,
+                H7105OscillationSide::End => config.end_degrees,
             };
             self.config.notify_state(client, &value.to_string()).await?;
         }
@@ -403,11 +403,11 @@ pub struct FanOscillationAngleParams {
 }
 
 pub async fn mqtt_h7105_oscillation_angle(
-    Payload(value): Payload<u8>,
+    Payload(value): Payload<i8>,
     Params(FanOscillationAngleParams { id, side }): Params<FanOscillationAngleParams>,
     State(state): State<StateHandle>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(value <= 75 && value % 5 == 0, "invalid H7105 angle");
+    anyhow::ensure!((-75..=75).contains(&value) && value % 5 == 0, "invalid H7105 angle");
     let device = state.resolve_device_for_control(&id).await?;
     let fan = device.h7105_fan_state;
     let mut config = H7105OscillationConfig::from_params(
@@ -415,13 +415,19 @@ pub async fn mqtt_h7105_oscillation_angle(
             .ok_or_else(|| anyhow::anyhow!("H7105 oscillation parameters unavailable"))?,
     )?;
     match side.as_str() {
-        "left" => config.left_degrees = value,
-        "right" => config.right_degrees = value,
+        "left" => {
+            config.start_degrees = value;
+            if config.flags == 0 {
+                config.end_degrees = -value;
+            }
+        }
+        "right" => {
+            config.end_degrees = value;
+            if config.flags == 0 {
+                config.start_degrees = -value;
+            }
+        }
         _ => anyhow::bail!("invalid H7105 oscillation side {side:?}"),
-    }
-    if config.flags == 0 {
-        config.left_degrees = value;
-        config.right_degrees = value;
     }
     state
         .h7105_set_oscillation_config(&device, fan.oscillating.unwrap_or(false), config)
@@ -472,8 +478,8 @@ pub async fn mqtt_h7105_oscillation_symmetric(
     )?;
     config.flags = if symmetric { 0 } else { 1 };
     if symmetric {
-        config.left_degrees = 25;
-        config.right_degrees = 25;
+        config.start_degrees = -25;
+        config.end_degrees = 25;
     }
     state
         .h7105_set_oscillation_config(&device, fan.oscillating.unwrap_or(false), config)

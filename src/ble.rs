@@ -610,10 +610,10 @@ impl NotifyH7105FanSpeed {
 pub enum H7105FanMode {
     #[default]
     Normal = 1,
-    Custom = 2,
-    Auto = 3,
+    Auto = 2,
+    Nature = 3,
+    Custom = 4,
     Sleep = 5,
-    Nature = 6,
 }
 
 impl H7105FanMode {
@@ -649,10 +649,10 @@ impl TryFrom<u8> for H7105FanMode {
     fn try_from(value: u8) -> anyhow::Result<Self> {
         match value {
             1 => Ok(Self::Normal),
-            2 => Ok(Self::Custom),
-            3 => Ok(Self::Auto),
+            2 => Ok(Self::Auto),
+            3 => Ok(Self::Nature),
+            4 => Ok(Self::Custom),
             5 => Ok(Self::Sleep),
-            6 => Ok(Self::Nature),
             _ => anyhow::bail!("unknown H7105 fan mode {value}"),
         }
     }
@@ -789,8 +789,8 @@ pub struct NotifyH7105Oscillation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct H7105OscillationConfig {
     pub speed: u8,
-    pub left_degrees: u8,
-    pub right_degrees: u8,
+    pub start_degrees: i8,
+    pub end_degrees: i8,
     pub flags: u8,
 }
 
@@ -800,22 +800,24 @@ impl H7105OscillationConfig {
         let span = params[1] as i16;
         let position = u16::from_be_bytes([params[2], params[3]]) as i16;
         let center_tenths = 900 - position;
-        let left_tenths = span * 5 - center_tenths;
-        let right_tenths = span * 5 + center_tenths;
+        let start_tenths = center_tenths - span * 5;
+        let end_tenths = center_tenths + span * 5;
         anyhow::ensure!(matches!(speed, 1 | 3), "invalid oscillation speed");
         anyhow::ensure!(matches!(params[4], 0 | 1), "invalid symmetry flag");
         anyhow::ensure!(
-            left_tenths >= 0 && right_tenths >= 0,
-            "invalid oscillation range"
+            start_tenths % 10 == 0 && end_tenths % 10 == 0,
+            "oscillation positions are not in whole degrees"
         );
+        let start_degrees: i8 = (start_tenths / 10).try_into()?;
+        let end_degrees: i8 = (end_tenths / 10).try_into()?;
         anyhow::ensure!(
-            left_tenths % 10 == 0 && right_tenths % 10 == 0,
-            "oscillation range is not in whole degrees"
+            (-75..=75).contains(&start_degrees) && (-75..=75).contains(&end_degrees),
+            "oscillation positions must be between -75 and 75 degrees"
         );
         Ok(Self {
             speed,
-            left_degrees: (left_tenths / 10).try_into()?,
-            right_degrees: (right_tenths / 10).try_into()?,
+            start_degrees,
+            end_degrees,
             flags: params[4],
         })
     }
@@ -823,12 +825,17 @@ impl H7105OscillationConfig {
     pub fn to_params(self) -> anyhow::Result<[u8; 5]> {
         anyhow::ensure!(matches!(self.speed, 1 | 3), "invalid oscillation speed");
         anyhow::ensure!(
-            self.left_degrees <= 75 && self.right_degrees <= 75,
-            "oscillation angles must be between 0 and 75 degrees"
+            (-75..=75).contains(&self.start_degrees)
+                && (-75..=75).contains(&self.end_degrees),
+            "oscillation positions must be between -75 and 75 degrees"
         );
-        let span = self.left_degrees as u16 + self.right_degrees as u16;
-        anyhow::ensure!(span > 0 && span <= 150, "invalid oscillation span");
-        let position = 900i16 + (self.left_degrees as i16 - self.right_degrees as i16) * 5;
+        anyhow::ensure!(
+            self.start_degrees < self.end_degrees,
+            "oscillation start must be lower than end"
+        );
+        let span: u16 = (self.end_degrees as i16 - self.start_degrees as i16).try_into()?;
+        let position =
+            900i16 - (self.start_degrees as i16 + self.end_degrees as i16) * 5;
         let position: u16 = position.try_into()?;
         let [position_hi, position_lo] = position.to_be_bytes();
         Ok([
@@ -895,6 +902,10 @@ impl Base64HexBytes {
     pub fn encode_for_sku<T: 'static>(sku: &str, value: &T) -> anyhow::Result<Self> {
         MGR.encode_for_sku(sku, value)
             .map(|bytes| Base64HexBytes(HexBytes(bytes)))
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.0 .0
     }
 
     pub fn base64(&self) -> Vec<String> {
@@ -1083,7 +1094,7 @@ mod test {
                 },
             )
             .unwrap(),
-            vec![0x33, 0x05, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x35,]
+            vec![0x33, 0x05, 0x00, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x34,]
         );
         round_trip(
             "H7105",
@@ -1154,19 +1165,24 @@ mod test {
             })
         );
         let old_range = H7105OscillationConfig::from_params([3, 90, 4, 176, 1]).unwrap();
-        assert_eq!(old_range.left_degrees, 75);
-        assert_eq!(old_range.right_degrees, 15);
+        assert_eq!(old_range.start_degrees, -75);
+        assert_eq!(old_range.end_degrees, 15);
         assert_eq!(old_range.to_params().unwrap(), [3, 90, 4, 176, 1]);
 
         let new_range = H7105OscillationConfig::from_params([3, 75, 3, 57, 1]).unwrap();
-        assert_eq!(new_range.left_degrees, 30);
-        assert_eq!(new_range.right_degrees, 45);
+        assert_eq!(new_range.start_degrees, -30);
+        assert_eq!(new_range.end_degrees, 45);
         assert_eq!(new_range.to_params().unwrap(), [3, 75, 3, 57, 1]);
 
         let symmetric_low = H7105OscillationConfig::from_params([1, 50, 3, 132, 0]).unwrap();
-        assert_eq!(symmetric_low.left_degrees, 25);
-        assert_eq!(symmetric_low.right_degrees, 25);
+        assert_eq!(symmetric_low.start_degrees, -25);
+        assert_eq!(symmetric_low.end_degrees, 25);
         assert_eq!(symmetric_low.to_params().unwrap(), [1, 50, 3, 132, 0]);
+
+        let right_only = H7105OscillationConfig::from_params([1, 30, 1, 194, 1]).unwrap();
+        assert_eq!(right_only.start_degrees, 30);
+        assert_eq!(right_only.end_degrees, 60);
+        assert_eq!(right_only.to_params().unwrap(), [1, 30, 1, 194, 1]);
     }
 
     #[test]

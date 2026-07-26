@@ -17,6 +17,7 @@ pub struct H7105FanState {
     pub mode: Option<H7105FanMode>,
     pub oscillating: Option<bool>,
     pub oscillation_params: Option<[u8; 5]>,
+    pub mode_config_packets: [[Option<[u8; 20]>; 3]; 5],
 }
 
 #[derive(Default, Clone, Debug)]
@@ -203,6 +204,29 @@ impl Device {
 
     pub fn set_h7105_mode(&mut self, mode: H7105FanMode) {
         self.h7105_fan_state.mode.replace(mode);
+    }
+
+    pub fn cache_h7105_mode_config(&mut self, data: &[u8]) {
+        if self.sku != "H7105" || data.len() != 20 || data[0..2] != [0xaa, 0x05] {
+            return;
+        }
+        let Some(mode_index) = data[2].checked_sub(1).filter(|index| *index < 5) else {
+            return;
+        };
+        let line_index = if matches!(
+            data[2],
+            value if value == H7105FanMode::Custom as u8 || value == H7105FanMode::Sleep as u8
+        ) {
+            data[3] as usize
+        } else {
+            0
+        };
+        if line_index >= 3 {
+            return;
+        }
+        let mut packet = [0u8; 20];
+        packet.copy_from_slice(data);
+        self.h7105_fan_state.mode_config_packets[mode_index as usize][line_index] = Some(packet);
     }
 
     pub fn set_h7105_oscillation(&mut self, oscillating: bool, params: [u8; 5]) {
@@ -643,6 +667,22 @@ mod test {
 
         let device = Device::new("H6127", "ce");
         assert_eq!(device.name(), "H6127_CE");
+    }
+
+    #[test]
+    fn h7105_caches_all_custom_mode_stages() {
+        let mut device = Device::new("H7105", "AA:BB:CC:DD:EE:FF");
+        for stage in 0..3u8 {
+            let mut packet = [0u8; 20];
+            packet[0..4].copy_from_slice(&[0xaa, 0x05, H7105FanMode::Custom as u8, stage]);
+            device.cache_h7105_mode_config(&packet);
+        }
+
+        let cached = device.h7105_fan_state.mode_config_packets
+            [(H7105FanMode::Custom as usize) - 1];
+        assert_eq!(cached[0].unwrap()[3], 0);
+        assert_eq!(cached[1].unwrap()[3], 1);
+        assert_eq!(cached[2].unwrap()[3], 2);
     }
 
     #[test]

@@ -437,6 +437,7 @@ async fn run_iot_subscriber(
 
                                 if let Some(op) = &packet.op {
                                     for cmd in &op.command {
+                                        device.cache_h7105_mode_config(cmd.bytes());
                                         let decoded = cmd.decode_for_sku(sku);
                                         log::debug!("Decoded: {decoded:?} for {sku}");
                                         match decoded {
