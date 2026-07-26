@@ -1286,9 +1286,24 @@ pub async fn mqtt_h7105_custom_control(
     }
     packet[10] = (if custom.oscillating { 0x10 } else { 0 }) | oscillation_params[0];
     packet[11..15].copy_from_slice(&oscillation_params[1..5]);
+    restart_h7105_custom_program(&mut packets)?;
 
     state.h7105_send_mode_config(&device, packets).await?;
     state.poll_iot_api(&device).await?;
+    Ok(())
+}
+
+fn restart_h7105_custom_program(packets: &mut [Option<[u8; 20]>; 3]) -> anyhow::Result<()> {
+    for (index, packet) in packets.iter_mut().enumerate() {
+        let packet = packet
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("H7105 Custom stage {} unavailable", index + 1))?;
+        packet[4] = u8::from(index == 0);
+        if index < 2 {
+            let duration = [packet[6], packet[7]];
+            packet[8..10].copy_from_slice(&duration);
+        }
+    }
     Ok(())
 }
 
@@ -1354,5 +1369,25 @@ mod test {
         assert!(parse_h7105_stage("0").is_err());
         assert!(parse_h7105_stage("4").is_err());
         assert!(parse_h7105_stage("invalid").is_err());
+    }
+
+    #[test]
+    fn h7105_custom_edits_restart_stage_one() {
+        let mut stage_one = [0u8; 20];
+        stage_one[6..10].copy_from_slice(&[0, 1, 0, 0]);
+        let mut stage_two = [0u8; 20];
+        stage_two[4] = 1;
+        stage_two[6..10].copy_from_slice(&[0, 60, 0, 42]);
+        let mut stage_three = [0u8; 20];
+        stage_three[4] = 1;
+        let mut packets = [Some(stage_one), Some(stage_two), Some(stage_three)];
+
+        restart_h7105_custom_program(&mut packets).unwrap();
+
+        assert_eq!(packets[0].unwrap()[4], 1);
+        assert_eq!(packets[0].unwrap()[8..10], [0, 1]);
+        assert_eq!(packets[1].unwrap()[4], 0);
+        assert_eq!(packets[1].unwrap()[8..10], [0, 60]);
+        assert_eq!(packets[2].unwrap()[4], 0);
     }
 }
