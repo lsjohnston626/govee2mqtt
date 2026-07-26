@@ -1,6 +1,4 @@
-use crate::ble::{
-    h7105_celsius_to_fahrenheit_hundredths, H7105FanMode, H7105OscillationConfig,
-};
+use crate::ble::{h7105_celsius_to_fahrenheit_hundredths, H7105FanMode, H7105OscillationConfig};
 use crate::hass_mqtt::base::{Device, EntityConfig, Origin};
 use crate::hass_mqtt::instance::{publish_entity_config, EntityInstance};
 use crate::hass_mqtt::number::NumberConfig;
@@ -514,7 +512,6 @@ pub async fn mqtt_h7105_oscillation_symmetric(
     Ok(())
 }
 
-
 #[derive(Clone, Copy)]
 enum H7105AutoNumberKind {
     OnTemperature,
@@ -579,11 +576,7 @@ impl H7105AutoNumber {
         .collect()
     }
 
-    fn new(
-        device: &ServiceDevice,
-        state: &StateHandle,
-        kind: H7105AutoNumberKind,
-    ) -> Self {
+    fn new(device: &ServiceDevice, state: &StateHandle, kind: H7105AutoNumberKind) -> Self {
         let (min, max, step, unit) = kind.range();
         let field = kind.field();
         Self {
@@ -630,12 +623,8 @@ impl EntityInstance for H7105AutoNumber {
             H7105AutoNumberKind::KeepTemperature => auto.keep_temperature_c.to_string(),
             H7105AutoNumberKind::OnSpeed => auto.on_speed.to_string(),
             H7105AutoNumberKind::KeepSpeed => auto.keep_speed.to_string(),
-            H7105AutoNumberKind::StartAngle => {
-                format_h7105_angle(auto.oscillation.start_degrees())
-            }
-            H7105AutoNumberKind::EndAngle => {
-                format_h7105_angle(auto.oscillation.end_degrees())
-            }
+            H7105AutoNumberKind::StartAngle => format_h7105_angle(auto.oscillation.start_degrees()),
+            H7105AutoNumberKind::EndAngle => format_h7105_angle(auto.oscillation.end_degrees()),
         };
         self.config.notify_state(client, &value).await
     }
@@ -662,11 +651,7 @@ impl H7105AutoSwitch {
         ]
     }
 
-    fn new(
-        device: &ServiceDevice,
-        state: &StateHandle,
-        kind: H7105AutoSwitchKind,
-    ) -> Self {
+    fn new(device: &ServiceDevice, state: &StateHandle, kind: H7105AutoSwitchKind) -> Self {
         let (field, name, icon) = match kind {
             H7105AutoSwitchKind::Oscillation => {
                 ("oscillation", "Auto Oscillation", "mdi:rotate-3d-variant")
@@ -738,10 +723,7 @@ impl H7105AutoOscillationSpeed {
                     device_class: None,
                     origin: Origin::default(),
                     device: Device::for_device(device),
-                    unique_id: format!(
-                        "gv2mqtt-{}-auto-oscillation-speed",
-                        topic_safe_id(device)
-                    ),
+                    unique_id: format!("gv2mqtt-{}-auto-oscillation-speed", topic_safe_id(device)),
                     entity_category: Some("config".to_string()),
                     icon: Some("mdi:speedometer".to_string()),
                 },
@@ -790,8 +772,7 @@ pub async fn mqtt_h7105_auto_control(
 ) -> anyhow::Result<()> {
     let device = state.resolve_device_for_control(&id).await?;
     let mut auto = device.h7105_auto_config()?;
-    let mut packets = device.h7105_fan_state.mode_config_packets
-        [(H7105FanMode::Auto as usize) - 1];
+    let mut packets = device.h7105_fan_state.mode_config_packets[(H7105FanMode::Auto as usize) - 1];
     let packet = packets[0]
         .as_mut()
         .ok_or_else(|| anyhow::anyhow!("H7105 Auto configuration unavailable"))?;
@@ -881,7 +862,12 @@ impl H7105CustomNumber {
     pub fn all(device: &ServiceDevice, state: &StateHandle) -> Vec<Self> {
         let mut result = Vec::new();
         for stage in 1..=3 {
-            result.push(Self::new(device, state, stage, H7105CustomNumberKind::Speed));
+            result.push(Self::new(
+                device,
+                state,
+                stage,
+                H7105CustomNumberKind::Speed,
+            ));
             if stage < 3 {
                 result.push(Self::new(
                     device,
@@ -915,9 +901,7 @@ impl H7105CustomNumber {
         let field = kind.field();
         let (label, min, max, step, unit) = match kind {
             H7105CustomNumberKind::Speed => ("Speed", 1.0, 12.0, 1.0, None),
-            H7105CustomNumberKind::Duration => {
-                ("Duration", 0.0, 779.0, 1.0, Some("min"))
-            }
+            H7105CustomNumberKind::Duration => ("Duration", 0.0, 779.0, 1.0, Some("min")),
             H7105CustomNumberKind::StartAngle => {
                 ("Oscillation Start Angle", -75.0, 75.0, 0.5, Some("deg"))
             }
@@ -977,9 +961,7 @@ impl EntityInstance for H7105CustomNumber {
             H7105CustomNumberKind::StartAngle => {
                 format_h7105_angle(custom.oscillation.start_degrees())
             }
-            H7105CustomNumberKind::EndAngle => {
-                format_h7105_angle(custom.oscillation.end_degrees())
-            }
+            H7105CustomNumberKind::EndAngle => format_h7105_angle(custom.oscillation.end_degrees()),
         };
         self.config.notify_state(client, &value).await
     }
@@ -1112,14 +1094,8 @@ impl H7105CustomOscillationSpeed {
                     entity_category: Some("config".to_string()),
                     icon: Some("mdi:speedometer".to_string()),
                 },
-                command_topic: topic(
-                    device,
-                    &format!("custom/{stage}/oscillation-speed/command"),
-                ),
-                state_topic: topic(
-                    device,
-                    &format!("custom/{stage}/oscillation-speed/state"),
-                ),
+                command_topic: topic(device, &format!("custom/{stage}/oscillation-speed/command")),
+                state_topic: topic(device, &format!("custom/{stage}/oscillation-speed/state")),
                 options: vec!["Low".to_string(), "High".to_string()],
             },
             device_id: device.id.to_string(),
@@ -1173,15 +1149,14 @@ impl H7105CustomSensor {
         ]
     }
 
-    fn new(
-        device: &ServiceDevice,
-        state: &StateHandle,
-        kind: H7105CustomSensorKind,
-    ) -> Self {
+    fn new(device: &ServiceDevice, state: &StateHandle, kind: H7105CustomSensorKind) -> Self {
         let (suffix, name, unit, icon) = match kind {
-            H7105CustomSensorKind::ActiveStage => {
-                ("custom-active-stage".to_string(), "Custom Active Stage".to_string(), None, "mdi:format-list-numbered")
-            }
+            H7105CustomSensorKind::ActiveStage => (
+                "custom-active-stage".to_string(),
+                "Custom Active Stage".to_string(),
+                None,
+                "mdi:format-list-numbered",
+            ),
             H7105CustomSensorKind::Remaining(stage) => (
                 format!("custom-stage-{stage}-remaining"),
                 format!("Custom Stage {stage} Remaining"),
@@ -1257,8 +1232,8 @@ pub async fn mqtt_h7105_custom_control(
     anyhow::ensure!((1..=3).contains(&stage), "invalid H7105 Custom stage");
     let device = state.resolve_device_for_control(&id).await?;
     let mut custom = device.h7105_custom_stages()?[(stage - 1) as usize];
-    let mut packets = device.h7105_fan_state.mode_config_packets
-        [(H7105FanMode::Custom as usize) - 1];
+    let mut packets =
+        device.h7105_fan_state.mode_config_packets[(H7105FanMode::Custom as usize) - 1];
     let packet = packets[(stage - 1) as usize]
         .as_mut()
         .ok_or_else(|| anyhow::anyhow!("H7105 Custom stage {stage} unavailable"))?;

@@ -254,15 +254,13 @@ impl Device {
     }
 
     pub fn h7105_auto_config(&self) -> anyhow::Result<H7105AutoConfig> {
-        let packet = self.h7105_fan_state.mode_config_packets
-            [(H7105FanMode::Auto as usize) - 1][0]
+        let packet = self.h7105_fan_state.mode_config_packets[(H7105FanMode::Auto as usize) - 1][0]
             .ok_or_else(|| anyhow::anyhow!("H7105 Auto configuration unavailable"))?;
         H7105AutoConfig::from_packet(packet)
     }
 
     pub fn h7105_custom_stages(&self) -> anyhow::Result<[H7105CustomStageConfig; 3]> {
-        let packets = self.h7105_fan_state.mode_config_packets
-            [(H7105FanMode::Custom as usize) - 1];
+        let packets = self.h7105_fan_state.mode_config_packets[(H7105FanMode::Custom as usize) - 1];
         Ok([
             H7105CustomStageConfig::from_packet(
                 packets[0].ok_or_else(|| anyhow::anyhow!("H7105 Custom stage 1 unavailable"))?,

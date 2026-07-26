@@ -823,8 +823,7 @@ impl H7105OscillationConfig {
     pub fn to_params(self) -> anyhow::Result<[u8; 5]> {
         anyhow::ensure!(matches!(self.speed, 1 | 3), "invalid oscillation speed");
         anyhow::ensure!(
-            (-750..=750).contains(&self.start_tenths)
-                && (-750..=750).contains(&self.end_tenths),
+            (-750..=750).contains(&self.start_tenths) && (-750..=750).contains(&self.end_tenths),
             "oscillation positions must be between -75 and 75 degrees"
         );
         anyhow::ensure!(
@@ -887,12 +886,10 @@ impl H7105AutoConfig {
             calculate_checksum(&packet[..19]) == packet[19],
             "invalid checksum"
         );
-        let on_temperature_c = h7105_fahrenheit_hundredths_to_celsius(
-            u16::from_be_bytes([packet[4], packet[5]]),
-        )?;
-        let keep_temperature_c = h7105_fahrenheit_hundredths_to_celsius(
-            u16::from_be_bytes([packet[7], packet[8]]),
-        )?;
+        let on_temperature_c =
+            h7105_fahrenheit_hundredths_to_celsius(u16::from_be_bytes([packet[4], packet[5]]))?;
+        let keep_temperature_c =
+            h7105_fahrenheit_hundredths_to_celsius(u16::from_be_bytes([packet[7], packet[8]]))?;
         let config = Self {
             on_speed: packet[3],
             on_temperature_c,
@@ -936,7 +933,10 @@ pub fn h7105_celsius_to_fahrenheit_hundredths(celsius: u8) -> anyhow::Result<u16
 }
 
 fn h7105_fahrenheit_hundredths_to_celsius(value: u16) -> anyhow::Result<u8> {
-    anyhow::ensure!((5000..=10400).contains(&value), "invalid H7105 Auto temperature");
+    anyhow::ensure!(
+        (5000..=10400).contains(&value),
+        "invalid H7105 Auto temperature"
+    );
     let rounded = (u32::from(value) - 3200 + 90) / 180;
     Ok(rounded.try_into()?)
 }
@@ -963,7 +963,10 @@ impl H7105CustomStageConfig {
             "invalid checksum"
         );
         anyhow::ensure!(packet[3] < 3, "invalid H7105 Custom stage");
-        anyhow::ensure!(matches!(packet[4], 0 | 1), "invalid H7105 active-stage flag");
+        anyhow::ensure!(
+            matches!(packet[4], 0 | 1),
+            "invalid H7105 active-stage flag"
+        );
         let duration = u16::from_be_bytes([packet[6], packet[7]]);
         let remaining = u16::from_be_bytes([packet[8], packet[9]]);
         let speed = packet[10] & 0x0f;
@@ -1347,8 +1350,8 @@ mod test {
         assert_eq!(half_degree.to_params().unwrap(), [1, 65, 3, 132, 0]);
 
         let auto_packet: [u8; 20] = finish(vec![
-            0xaa, 0x05, 0x02, 0x03, 0x1d, 0x5f, 0x05, 0x1e, 0xc8, 0x00, 0x01, 0x1e,
-            0x01, 0xc2, 0x01, 0, 0, 0, 0,
+            0xaa, 0x05, 0x02, 0x03, 0x1d, 0x5f, 0x05, 0x1e, 0xc8, 0x00, 0x01, 0x1e, 0x01, 0xc2,
+            0x01, 0, 0, 0, 0,
         ])
         .try_into()
         .unwrap();
@@ -1359,8 +1362,8 @@ mod test {
         assert_eq!(auto.keep_speed, 5);
 
         let custom = H7105CustomStageConfig::from_packet([
-            0xaa, 0x05, 0x05, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x02, 0x11, 0x41,
-            0x03, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7e,
+            0xaa, 0x05, 0x05, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x02, 0x11, 0x41, 0x03, 0x84,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x7e,
         ])
         .unwrap();
         assert_eq!(custom.stage, 1);
