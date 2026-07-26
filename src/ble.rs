@@ -1134,7 +1134,7 @@ mod test {
         assert_eq!(
             MGR.decode_for_sku(
                 "H7105",
-                &[0xaa, 0x05, 0x00, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xa9]
+                &[0xaa, 0x05, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xac]
             ),
             GoveeBlePacket::NotifyH7105FanMode(NotifyH7105FanMode {
                 mode: H7105FanMode::Nature,
