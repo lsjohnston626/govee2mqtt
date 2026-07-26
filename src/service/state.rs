@@ -581,6 +581,15 @@ impl State {
             packets[0].is_some(),
             "H7105 {mode:?} configuration unavailable; wait for a device poll"
         );
+        self.h7105_send_mode_config(device, packets).await
+    }
+
+    pub async fn h7105_send_mode_config(
+        self: &Arc<Self>,
+        device: &Device,
+        packets: [Option<[u8; 20]>; 3],
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(device.sku == "H7105", "not an H7105 device");
         let iot = self
             .get_iot_client()
             .await
@@ -590,6 +599,10 @@ impl State {
             .as_ref()
             .context("missing private device metadata")?;
         for packet in packets.into_iter().flatten() {
+            anyhow::ensure!(
+                packet[0..2] == [0xaa, 0x05],
+                "invalid H7105 mode configuration packet"
+            );
             let mut body = packet[..19].to_vec();
             body[0] = 0x3a;
             let command = Base64HexBytes::with_bytes(body);

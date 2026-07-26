@@ -1,8 +1,11 @@
-use crate::ble::{H7105FanMode, H7105OscillationConfig};
+use crate::ble::{
+    h7105_celsius_to_fahrenheit_hundredths, H7105FanMode, H7105OscillationConfig,
+};
 use crate::hass_mqtt::base::{Device, EntityConfig, Origin};
 use crate::hass_mqtt::instance::{publish_entity_config, EntityInstance};
 use crate::hass_mqtt::number::NumberConfig;
 use crate::hass_mqtt::select::SelectConfig;
+use crate::hass_mqtt::sensor::SensorConfig;
 use crate::hass_mqtt::switch::SwitchConfig;
 use crate::service::device::Device as ServiceDevice;
 use crate::service::hass::{availability_topic, topic_safe_id, HassClient};
@@ -248,7 +251,7 @@ impl H7105OscillationAngle {
                 )),
                 min: Some(-75.0),
                 max: Some(75.0),
-                step: 5.0,
+                step: 0.5,
                 unit_of_measurement: Some("deg"),
             },
             device_id: device.id.to_string(),
@@ -273,10 +276,12 @@ impl EntityInstance for H7105OscillationAngle {
         if let Some(params) = device.h7105_fan_state.oscillation_params {
             let config = H7105OscillationConfig::from_params(params)?;
             let value = match self.side {
-                H7105OscillationSide::Start => config.start_degrees,
-                H7105OscillationSide::End => config.end_degrees,
+                H7105OscillationSide::Start => config.start_degrees(),
+                H7105OscillationSide::End => config.end_degrees(),
             };
-            self.config.notify_state(client, &value.to_string()).await?;
+            self.config
+                .notify_state(client, &format_h7105_angle(value))
+                .await?;
         }
         Ok(())
     }
@@ -331,6 +336,26 @@ impl EntityInstance for H7105OscillationSpeed {
                 .await?;
         }
         Ok(())
+    }
+}
+
+fn h7105_angle_to_tenths(value: f32) -> anyhow::Result<i16> {
+    anyhow::ensure!(value.is_finite(), "invalid H7105 angle");
+    let tenths = (value * 10.0).round();
+    anyhow::ensure!(
+        (tenths - value * 10.0).abs() < 0.01
+            && (-750.0..=750.0).contains(&tenths)
+            && (tenths as i16) % 5 == 0,
+        "H7105 angles must be -75 through 75 degrees in half-degree steps"
+    );
+    Ok(tenths as i16)
+}
+
+fn format_h7105_angle(value: f32) -> String {
+    if value.fract() == 0.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}")
     }
 }
 
@@ -403,14 +428,11 @@ pub struct FanOscillationAngleParams {
 }
 
 pub async fn mqtt_h7105_oscillation_angle(
-    Payload(value): Payload<i8>,
+    Payload(value): Payload<f32>,
     Params(FanOscillationAngleParams { id, side }): Params<FanOscillationAngleParams>,
     State(state): State<StateHandle>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        (-75..=75).contains(&value) && value % 5 == 0,
-        "invalid H7105 angle"
-    );
+    let value_tenths = h7105_angle_to_tenths(value)?;
     let device = state.resolve_device_for_control(&id).await?;
     let fan = device.h7105_fan_state;
     let mut config = H7105OscillationConfig::from_params(
@@ -419,15 +441,15 @@ pub async fn mqtt_h7105_oscillation_angle(
     )?;
     match side.as_str() {
         "left" => {
-            config.start_degrees = value;
+            config.start_tenths = value_tenths;
             if config.flags == 0 {
-                config.end_degrees = -value;
+                config.end_tenths = -value_tenths;
             }
         }
         "right" => {
-            config.end_degrees = value;
+            config.end_tenths = value_tenths;
             if config.flags == 0 {
-                config.start_degrees = -value;
+                config.start_tenths = -value_tenths;
             }
         }
         _ => anyhow::bail!("invalid H7105 oscillation side {side:?}"),
@@ -481,12 +503,838 @@ pub async fn mqtt_h7105_oscillation_symmetric(
     )?;
     config.flags = if symmetric { 0 } else { 1 };
     if symmetric {
-        config.start_degrees = -25;
-        config.end_degrees = 25;
+        let half_span = (config.end_tenths - config.start_tenths) / 2;
+        config.start_tenths = -half_span;
+        config.end_tenths = half_span;
     }
     state
         .h7105_set_oscillation_config(&device, fan.oscillating.unwrap_or(false), config)
         .await?;
     state.poll_iot_api(&device).await?;
     Ok(())
+}
+
+
+#[derive(Clone, Copy)]
+enum H7105AutoNumberKind {
+    OnTemperature,
+    KeepTemperature,
+    OnSpeed,
+    KeepSpeed,
+    StartAngle,
+    EndAngle,
+}
+
+impl H7105AutoNumberKind {
+    fn field(self) -> &'static str {
+        match self {
+            Self::OnTemperature => "on-temperature",
+            Self::KeepTemperature => "keep-temperature",
+            Self::OnSpeed => "on-speed",
+            Self::KeepSpeed => "keep-speed",
+            Self::StartAngle => "start-angle",
+            Self::EndAngle => "end-angle",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::OnTemperature => "Auto On Temperature",
+            Self::KeepTemperature => "Auto Keep Temperature",
+            Self::OnSpeed => "Auto On Speed",
+            Self::KeepSpeed => "Auto Keep Speed",
+            Self::StartAngle => "Auto Oscillation Start Angle",
+            Self::EndAngle => "Auto Oscillation End Angle",
+        }
+    }
+
+    fn range(self) -> (f32, f32, f32, Option<&'static str>) {
+        match self {
+            Self::OnTemperature | Self::KeepTemperature => (10.0, 40.0, 1.0, Some("°C")),
+            Self::OnSpeed | Self::KeepSpeed => (1.0, 12.0, 1.0, None),
+            Self::StartAngle | Self::EndAngle => (-75.0, 75.0, 0.5, Some("deg")),
+        }
+    }
+}
+
+pub struct H7105AutoNumber {
+    config: NumberConfig,
+    device_id: String,
+    state: StateHandle,
+    kind: H7105AutoNumberKind,
+}
+
+impl H7105AutoNumber {
+    pub fn all(device: &ServiceDevice, state: &StateHandle) -> Vec<Self> {
+        [
+            H7105AutoNumberKind::OnTemperature,
+            H7105AutoNumberKind::KeepTemperature,
+            H7105AutoNumberKind::OnSpeed,
+            H7105AutoNumberKind::KeepSpeed,
+            H7105AutoNumberKind::StartAngle,
+            H7105AutoNumberKind::EndAngle,
+        ]
+        .into_iter()
+        .map(|kind| Self::new(device, state, kind))
+        .collect()
+    }
+
+    fn new(
+        device: &ServiceDevice,
+        state: &StateHandle,
+        kind: H7105AutoNumberKind,
+    ) -> Self {
+        let (min, max, step, unit) = kind.range();
+        let field = kind.field();
+        Self {
+            config: NumberConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some(kind.name().to_string()),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!("gv2mqtt-{}-auto-{field}", topic_safe_id(device)),
+                    entity_category: Some("config".to_string()),
+                    icon: None,
+                },
+                command_topic: topic(device, &format!("auto/{field}/command")),
+                state_topic: Some(topic(device, &format!("auto/{field}/state"))),
+                min: Some(min),
+                max: Some(max),
+                step,
+                unit_of_measurement: unit,
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+            kind,
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105AutoNumber {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        let auto = device.h7105_auto_config()?;
+        let value = match self.kind {
+            H7105AutoNumberKind::OnTemperature => auto.on_temperature_c.to_string(),
+            H7105AutoNumberKind::KeepTemperature => auto.keep_temperature_c.to_string(),
+            H7105AutoNumberKind::OnSpeed => auto.on_speed.to_string(),
+            H7105AutoNumberKind::KeepSpeed => auto.keep_speed.to_string(),
+            H7105AutoNumberKind::StartAngle => {
+                format_h7105_angle(auto.oscillation.start_degrees())
+            }
+            H7105AutoNumberKind::EndAngle => {
+                format_h7105_angle(auto.oscillation.end_degrees())
+            }
+        };
+        self.config.notify_state(client, &value).await
+    }
+}
+
+#[derive(Clone, Copy)]
+enum H7105AutoSwitchKind {
+    Oscillation,
+    Symmetric,
+}
+
+pub struct H7105AutoSwitch {
+    config: SwitchConfig,
+    device_id: String,
+    state: StateHandle,
+    kind: H7105AutoSwitchKind,
+}
+
+impl H7105AutoSwitch {
+    pub fn all(device: &ServiceDevice, state: &StateHandle) -> [Self; 2] {
+        [
+            Self::new(device, state, H7105AutoSwitchKind::Oscillation),
+            Self::new(device, state, H7105AutoSwitchKind::Symmetric),
+        ]
+    }
+
+    fn new(
+        device: &ServiceDevice,
+        state: &StateHandle,
+        kind: H7105AutoSwitchKind,
+    ) -> Self {
+        let (field, name, icon) = match kind {
+            H7105AutoSwitchKind::Oscillation => {
+                ("oscillation", "Auto Oscillation", "mdi:rotate-3d-variant")
+            }
+            H7105AutoSwitchKind::Symmetric => (
+                "symmetric",
+                "Auto Symmetric Oscillation",
+                "mdi:arrow-left-right",
+            ),
+        };
+        Self {
+            config: SwitchConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some(name.to_string()),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!("gv2mqtt-{}-auto-{field}", topic_safe_id(device)),
+                    entity_category: Some("config".to_string()),
+                    icon: Some(icon.to_string()),
+                },
+                command_topic: topic(device, &format!("auto/{field}/command")),
+                state_topic: topic(device, &format!("auto/{field}/state")),
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+            kind,
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105AutoSwitch {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        let auto = device.h7105_auto_config()?;
+        let on = match self.kind {
+            H7105AutoSwitchKind::Oscillation => auto.oscillating,
+            H7105AutoSwitchKind::Symmetric => auto.oscillation.flags == 0,
+        };
+        client
+            .publish(&self.config.state_topic, if on { "ON" } else { "OFF" })
+            .await
+    }
+}
+
+pub struct H7105AutoOscillationSpeed {
+    config: SelectConfig,
+    device_id: String,
+    state: StateHandle,
+}
+
+impl H7105AutoOscillationSpeed {
+    pub fn new(device: &ServiceDevice, state: &StateHandle) -> Self {
+        Self {
+            config: SelectConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some("Auto Oscillation Speed".to_string()),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!(
+                        "gv2mqtt-{}-auto-oscillation-speed",
+                        topic_safe_id(device)
+                    ),
+                    entity_category: Some("config".to_string()),
+                    icon: Some("mdi:speedometer".to_string()),
+                },
+                command_topic: topic(device, "auto/oscillation-speed/command"),
+                state_topic: topic(device, "auto/oscillation-speed/state"),
+                options: vec!["Low".to_string(), "High".to_string()],
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105AutoOscillationSpeed {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        let auto = device.h7105_auto_config()?;
+        client
+            .publish(
+                &self.config.state_topic,
+                oscillation_speed_name(auto.oscillation.speed)?,
+            )
+            .await
+    }
+}
+
+#[derive(Deserialize)]
+pub struct H7105AutoControlParams {
+    id: String,
+    field: String,
+}
+
+pub async fn mqtt_h7105_auto_control(
+    Payload(payload): Payload<String>,
+    Params(H7105AutoControlParams { id, field }): Params<H7105AutoControlParams>,
+    State(state): State<StateHandle>,
+) -> anyhow::Result<()> {
+    let device = state.resolve_device_for_control(&id).await?;
+    let mut auto = device.h7105_auto_config()?;
+    let mut packets = device.h7105_fan_state.mode_config_packets
+        [(H7105FanMode::Auto as usize) - 1];
+    let packet = packets[0]
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("H7105 Auto configuration unavailable"))?;
+
+    match field.as_str() {
+        "on-temperature" => auto.on_temperature_c = payload.parse()?,
+        "keep-temperature" => auto.keep_temperature_c = payload.parse()?,
+        "on-speed" => auto.on_speed = payload.parse()?,
+        "keep-speed" => auto.keep_speed = payload.parse()?,
+        "oscillation" => {
+            auto.oscillating = parse_on_off(&payload, "Auto oscillation")?;
+        }
+        "oscillation-speed" => auto.oscillation.speed = parse_oscillation_speed(&payload)?,
+        "symmetric" => {
+            let symmetric = parse_on_off(&payload, "Auto symmetry")?;
+            auto.oscillation.flags = if symmetric { 0 } else { 1 };
+            if symmetric {
+                center_h7105_oscillation(&mut auto.oscillation);
+            }
+        }
+        "start-angle" => {
+            let value = h7105_angle_to_tenths(payload.parse()?)?;
+            auto.oscillation.start_tenths = value;
+            if auto.oscillation.flags == 0 {
+                auto.oscillation.end_tenths = -value;
+            }
+        }
+        "end-angle" => {
+            let value = h7105_angle_to_tenths(payload.parse()?)?;
+            auto.oscillation.end_tenths = value;
+            if auto.oscillation.flags == 0 {
+                auto.oscillation.start_tenths = -value;
+            }
+        }
+        _ => anyhow::bail!("invalid H7105 Auto field {field:?}"),
+    }
+    auto.validate()?;
+    let oscillation_params = auto.oscillation.to_params()?;
+    packet[3] = auto.on_speed;
+    packet[6] = auto.keep_speed;
+    packet[9] = u8::from(auto.oscillating);
+    packet[10..15].copy_from_slice(&oscillation_params);
+    if field == "on-temperature" {
+        packet[4..6].copy_from_slice(
+            &h7105_celsius_to_fahrenheit_hundredths(auto.on_temperature_c)?.to_be_bytes(),
+        );
+    }
+    if field == "keep-temperature" {
+        packet[7..9].copy_from_slice(
+            &h7105_celsius_to_fahrenheit_hundredths(auto.keep_temperature_c)?.to_be_bytes(),
+        );
+    }
+
+    state.h7105_send_mode_config(&device, packets).await?;
+    state.poll_iot_api(&device).await?;
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum H7105CustomNumberKind {
+    Speed,
+    Duration,
+    StartAngle,
+    EndAngle,
+}
+
+impl H7105CustomNumberKind {
+    fn field(self) -> &'static str {
+        match self {
+            Self::Speed => "speed",
+            Self::Duration => "duration",
+            Self::StartAngle => "start-angle",
+            Self::EndAngle => "end-angle",
+        }
+    }
+}
+
+pub struct H7105CustomNumber {
+    config: NumberConfig,
+    device_id: String,
+    state: StateHandle,
+    stage: u8,
+    kind: H7105CustomNumberKind,
+}
+
+impl H7105CustomNumber {
+    pub fn all(device: &ServiceDevice, state: &StateHandle) -> Vec<Self> {
+        let mut result = Vec::new();
+        for stage in 1..=3 {
+            result.push(Self::new(device, state, stage, H7105CustomNumberKind::Speed));
+            if stage < 3 {
+                result.push(Self::new(
+                    device,
+                    state,
+                    stage,
+                    H7105CustomNumberKind::Duration,
+                ));
+            }
+            result.push(Self::new(
+                device,
+                state,
+                stage,
+                H7105CustomNumberKind::StartAngle,
+            ));
+            result.push(Self::new(
+                device,
+                state,
+                stage,
+                H7105CustomNumberKind::EndAngle,
+            ));
+        }
+        result
+    }
+
+    fn new(
+        device: &ServiceDevice,
+        state: &StateHandle,
+        stage: u8,
+        kind: H7105CustomNumberKind,
+    ) -> Self {
+        let field = kind.field();
+        let (label, min, max, step, unit) = match kind {
+            H7105CustomNumberKind::Speed => ("Speed", 1.0, 12.0, 1.0, None),
+            H7105CustomNumberKind::Duration => {
+                ("Duration", 0.0, 779.0, 1.0, Some("min"))
+            }
+            H7105CustomNumberKind::StartAngle => {
+                ("Oscillation Start Angle", -75.0, 75.0, 0.5, Some("deg"))
+            }
+            H7105CustomNumberKind::EndAngle => {
+                ("Oscillation End Angle", -75.0, 75.0, 0.5, Some("deg"))
+            }
+        };
+        Self {
+            config: NumberConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some(format!("Custom Stage {stage} {label}")),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!(
+                        "gv2mqtt-{}-custom-stage-{stage}-{field}",
+                        topic_safe_id(device)
+                    ),
+                    entity_category: Some("config".to_string()),
+                    icon: None,
+                },
+                command_topic: topic(device, &format!("custom/{stage}/{field}/command")),
+                state_topic: Some(topic(device, &format!("custom/{stage}/{field}/state"))),
+                min: Some(min),
+                max: Some(max),
+                step,
+                unit_of_measurement: unit,
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+            stage,
+            kind,
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105CustomNumber {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        let custom = device.h7105_custom_stages()?[(self.stage - 1) as usize];
+        let value = match self.kind {
+            H7105CustomNumberKind::Speed => custom.speed.to_string(),
+            H7105CustomNumberKind::Duration => custom
+                .duration_minutes
+                .ok_or_else(|| anyhow::anyhow!("Custom stage has no duration"))?
+                .to_string(),
+            H7105CustomNumberKind::StartAngle => {
+                format_h7105_angle(custom.oscillation.start_degrees())
+            }
+            H7105CustomNumberKind::EndAngle => {
+                format_h7105_angle(custom.oscillation.end_degrees())
+            }
+        };
+        self.config.notify_state(client, &value).await
+    }
+}
+
+#[derive(Clone, Copy)]
+enum H7105CustomSwitchKind {
+    Oscillation,
+    Symmetric,
+}
+
+pub struct H7105CustomSwitch {
+    config: SwitchConfig,
+    device_id: String,
+    state: StateHandle,
+    stage: u8,
+    kind: H7105CustomSwitchKind,
+}
+
+impl H7105CustomSwitch {
+    pub fn all(device: &ServiceDevice, state: &StateHandle) -> Vec<Self> {
+        let mut result = Vec::new();
+        for stage in 1..=3 {
+            result.push(Self::new(
+                device,
+                state,
+                stage,
+                H7105CustomSwitchKind::Oscillation,
+            ));
+            result.push(Self::new(
+                device,
+                state,
+                stage,
+                H7105CustomSwitchKind::Symmetric,
+            ));
+        }
+        result
+    }
+
+    fn new(
+        device: &ServiceDevice,
+        state: &StateHandle,
+        stage: u8,
+        kind: H7105CustomSwitchKind,
+    ) -> Self {
+        let (field, label, icon) = match kind {
+            H7105CustomSwitchKind::Oscillation => {
+                ("oscillation", "Oscillation", "mdi:rotate-3d-variant")
+            }
+            H7105CustomSwitchKind::Symmetric => {
+                ("symmetric", "Symmetric Oscillation", "mdi:arrow-left-right")
+            }
+        };
+        Self {
+            config: SwitchConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some(format!("Custom Stage {stage} {label}")),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!(
+                        "gv2mqtt-{}-custom-stage-{stage}-{field}",
+                        topic_safe_id(device)
+                    ),
+                    entity_category: Some("config".to_string()),
+                    icon: Some(icon.to_string()),
+                },
+                command_topic: topic(device, &format!("custom/{stage}/{field}/command")),
+                state_topic: topic(device, &format!("custom/{stage}/{field}/state")),
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+            stage,
+            kind,
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105CustomSwitch {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        let custom = device.h7105_custom_stages()?[(self.stage - 1) as usize];
+        let on = match self.kind {
+            H7105CustomSwitchKind::Oscillation => custom.oscillating,
+            H7105CustomSwitchKind::Symmetric => custom.oscillation.flags == 0,
+        };
+        client
+            .publish(&self.config.state_topic, if on { "ON" } else { "OFF" })
+            .await
+    }
+}
+
+pub struct H7105CustomOscillationSpeed {
+    config: SelectConfig,
+    device_id: String,
+    state: StateHandle,
+    stage: u8,
+}
+
+impl H7105CustomOscillationSpeed {
+    pub fn all(device: &ServiceDevice, state: &StateHandle) -> Vec<Self> {
+        (1..=3)
+            .map(|stage| Self::new(device, state, stage))
+            .collect()
+    }
+
+    fn new(device: &ServiceDevice, state: &StateHandle, stage: u8) -> Self {
+        Self {
+            config: SelectConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some(format!("Custom Stage {stage} Oscillation Speed")),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: format!(
+                        "gv2mqtt-{}-custom-stage-{stage}-oscillation-speed",
+                        topic_safe_id(device)
+                    ),
+                    entity_category: Some("config".to_string()),
+                    icon: Some("mdi:speedometer".to_string()),
+                },
+                command_topic: topic(
+                    device,
+                    &format!("custom/{stage}/oscillation-speed/command"),
+                ),
+                state_topic: topic(
+                    device,
+                    &format!("custom/{stage}/oscillation-speed/state"),
+                ),
+                options: vec!["Low".to_string(), "High".to_string()],
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+            stage,
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105CustomOscillationSpeed {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        let custom = device.h7105_custom_stages()?[(self.stage - 1) as usize];
+        client
+            .publish(
+                &self.config.state_topic,
+                oscillation_speed_name(custom.oscillation.speed)?,
+            )
+            .await
+    }
+}
+
+#[derive(Clone, Copy)]
+enum H7105CustomSensorKind {
+    ActiveStage,
+    Remaining(u8),
+}
+
+pub struct H7105CustomSensor {
+    config: SensorConfig,
+    device_id: String,
+    state: StateHandle,
+    kind: H7105CustomSensorKind,
+}
+
+impl H7105CustomSensor {
+    pub fn all(device: &ServiceDevice, state: &StateHandle) -> [Self; 3] {
+        [
+            Self::new(device, state, H7105CustomSensorKind::ActiveStage),
+            Self::new(device, state, H7105CustomSensorKind::Remaining(1)),
+            Self::new(device, state, H7105CustomSensorKind::Remaining(2)),
+        ]
+    }
+
+    fn new(
+        device: &ServiceDevice,
+        state: &StateHandle,
+        kind: H7105CustomSensorKind,
+    ) -> Self {
+        let (suffix, name, unit, icon) = match kind {
+            H7105CustomSensorKind::ActiveStage => {
+                ("custom-active-stage".to_string(), "Custom Active Stage".to_string(), None, "mdi:format-list-numbered")
+            }
+            H7105CustomSensorKind::Remaining(stage) => (
+                format!("custom-stage-{stage}-remaining"),
+                format!("Custom Stage {stage} Remaining"),
+                Some("min"),
+                "mdi:timer-outline",
+            ),
+        };
+        let unique_id = format!("gv2mqtt-{}-{suffix}", topic_safe_id(device));
+        Self {
+            config: SensorConfig {
+                base: EntityConfig {
+                    availability_topic: availability_topic(),
+                    name: Some(name),
+                    device_class: None,
+                    origin: Origin::default(),
+                    device: Device::for_device(device),
+                    unique_id: unique_id.clone(),
+                    entity_category: Some("diagnostic".to_string()),
+                    icon: Some(icon.to_string()),
+                },
+                state_topic: topic(device, &format!("{suffix}/state")),
+                state_class: None,
+                unit_of_measurement: unit,
+                json_attributes_topic: None,
+            },
+            device_id: device.id.to_string(),
+            state: state.clone(),
+            kind,
+        }
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H7105CustomSensor {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.config.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        let stages = device.h7105_custom_stages()?;
+        let value = match self.kind {
+            H7105CustomSensorKind::ActiveStage => stages
+                .iter()
+                .find(|stage| stage.active)
+                .map(|stage| stage.stage.to_string())
+                .unwrap_or_else(|| "0".to_string()),
+            H7105CustomSensorKind::Remaining(stage) => stages[(stage - 1) as usize]
+                .remaining_minutes
+                .map(|minutes| minutes.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+        };
+        self.config.notify_state(client, &value).await
+    }
+}
+
+#[derive(Deserialize)]
+pub struct H7105CustomControlParams {
+    id: String,
+    stage: u8,
+    field: String,
+}
+
+pub async fn mqtt_h7105_custom_control(
+    Payload(payload): Payload<String>,
+    Params(H7105CustomControlParams { id, stage, field }): Params<H7105CustomControlParams>,
+    State(state): State<StateHandle>,
+) -> anyhow::Result<()> {
+    anyhow::ensure!((1..=3).contains(&stage), "invalid H7105 Custom stage");
+    let device = state.resolve_device_for_control(&id).await?;
+    let mut custom = device.h7105_custom_stages()?[(stage - 1) as usize];
+    let mut packets = device.h7105_fan_state.mode_config_packets
+        [(H7105FanMode::Custom as usize) - 1];
+    let packet = packets[(stage - 1) as usize]
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("H7105 Custom stage {stage} unavailable"))?;
+
+    match field.as_str() {
+        "speed" => custom.speed = payload.parse()?,
+        "duration" => {
+            anyhow::ensure!(stage < 3, "H7105 Custom stage 3 is indefinite");
+            let duration: u16 = payload.parse()?;
+            anyhow::ensure!(duration <= 779, "H7105 Custom duration exceeds 12:59");
+            custom.duration_minutes = Some(duration);
+            custom.remaining_minutes = Some(duration);
+        }
+        "oscillation" => {
+            custom.oscillating = parse_on_off(&payload, "Custom oscillation")?;
+        }
+        "oscillation-speed" => custom.oscillation.speed = parse_oscillation_speed(&payload)?,
+        "symmetric" => {
+            let symmetric = parse_on_off(&payload, "Custom symmetry")?;
+            custom.oscillation.flags = if symmetric { 0 } else { 1 };
+            if symmetric {
+                center_h7105_oscillation(&mut custom.oscillation);
+            }
+        }
+        "start-angle" => {
+            let value = h7105_angle_to_tenths(payload.parse()?)?;
+            custom.oscillation.start_tenths = value;
+            if custom.oscillation.flags == 0 {
+                custom.oscillation.end_tenths = -value;
+            }
+        }
+        "end-angle" => {
+            let value = h7105_angle_to_tenths(payload.parse()?)?;
+            custom.oscillation.end_tenths = value;
+            if custom.oscillation.flags == 0 {
+                custom.oscillation.start_tenths = -value;
+            }
+        }
+        _ => anyhow::bail!("invalid H7105 Custom field {field:?}"),
+    }
+    custom.validate()?;
+    let oscillation_params = custom.oscillation.to_params()?;
+    packet[5] = custom.speed;
+    if field == "duration" {
+        let duration = custom
+            .duration_minutes
+            .ok_or_else(|| anyhow::anyhow!("H7105 Custom stage has no duration"))?;
+        packet[6..8].copy_from_slice(&duration.to_be_bytes());
+        packet[8..10].copy_from_slice(&duration.to_be_bytes());
+    }
+    packet[10] = (if custom.oscillating { 0x10 } else { 0 }) | oscillation_params[0];
+    packet[11..15].copy_from_slice(&oscillation_params[1..5]);
+
+    state.h7105_send_mode_config(&device, packets).await?;
+    state.poll_iot_api(&device).await?;
+    Ok(())
+}
+
+fn parse_on_off(payload: &str, name: &str) -> anyhow::Result<bool> {
+    match payload {
+        "ON" => Ok(true),
+        "OFF" => Ok(false),
+        _ => anyhow::bail!("invalid H7105 {name} payload {payload:?}"),
+    }
+}
+
+fn parse_oscillation_speed(payload: &str) -> anyhow::Result<u8> {
+    match payload {
+        "Low" => Ok(1),
+        "High" => Ok(3),
+        _ => anyhow::bail!("invalid H7105 oscillation speed {payload:?}"),
+    }
+}
+
+fn center_h7105_oscillation(config: &mut H7105OscillationConfig) {
+    let half_span = (config.end_tenths - config.start_tenths) / 2;
+    config.start_tenths = -half_span;
+    config.end_tenths = half_span;
 }

@@ -468,7 +468,11 @@ async fn run_iot_subscriber(
                                                 device.set_h5086_power_reading(reading);
                                             }
                                             GoveeBlePacket::NotifyH7105FanSpeed(update) => {
-                                                device.set_h7105_speed(update.speed);
+                                                if device.h7105_fan_state.mode
+                                                    == Some(crate::ble::H7105FanMode::Normal)
+                                                {
+                                                    device.set_h7105_speed(update.speed);
+                                                }
                                             }
                                             GoveeBlePacket::NotifyH7105FanMode(update) => {
                                                 device.set_h7105_mode(update.mode);

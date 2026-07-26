@@ -611,9 +611,9 @@ pub enum H7105FanMode {
     #[default]
     Normal = 1,
     Auto = 2,
-    Nature = 3,
-    Custom = 4,
-    Sleep = 5,
+    Sleep = 3,
+    Nature = 4,
+    Custom = 5,
 }
 
 impl H7105FanMode {
@@ -650,9 +650,9 @@ impl TryFrom<u8> for H7105FanMode {
         match value {
             1 => Ok(Self::Normal),
             2 => Ok(Self::Auto),
-            3 => Ok(Self::Nature),
-            4 => Ok(Self::Custom),
-            5 => Ok(Self::Sleep),
+            3 => Ok(Self::Sleep),
+            4 => Ok(Self::Nature),
+            5 => Ok(Self::Custom),
             _ => anyhow::bail!("unknown H7105 fan mode {value}"),
         }
     }
@@ -789,8 +789,8 @@ pub struct NotifyH7105Oscillation {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct H7105OscillationConfig {
     pub speed: u8,
-    pub start_degrees: i8,
-    pub end_degrees: i8,
+    pub start_tenths: i16,
+    pub end_tenths: i16,
     pub flags: u8,
 }
 
@@ -805,19 +805,17 @@ impl H7105OscillationConfig {
         anyhow::ensure!(matches!(speed, 1 | 3), "invalid oscillation speed");
         anyhow::ensure!(matches!(params[4], 0 | 1), "invalid symmetry flag");
         anyhow::ensure!(
-            start_tenths % 10 == 0 && end_tenths % 10 == 0,
-            "oscillation positions are not in whole degrees"
+            start_tenths % 5 == 0 && end_tenths % 5 == 0,
+            "oscillation positions are not in half degrees"
         );
-        let start_degrees: i8 = (start_tenths / 10).try_into()?;
-        let end_degrees: i8 = (end_tenths / 10).try_into()?;
         anyhow::ensure!(
-            (-75..=75).contains(&start_degrees) && (-75..=75).contains(&end_degrees),
+            (-750..=750).contains(&start_tenths) && (-750..=750).contains(&end_tenths),
             "oscillation positions must be between -75 and 75 degrees"
         );
         Ok(Self {
             speed,
-            start_degrees,
-            end_degrees,
+            start_tenths,
+            end_tenths,
             flags: params[4],
         })
     }
@@ -825,15 +823,30 @@ impl H7105OscillationConfig {
     pub fn to_params(self) -> anyhow::Result<[u8; 5]> {
         anyhow::ensure!(matches!(self.speed, 1 | 3), "invalid oscillation speed");
         anyhow::ensure!(
-            (-75..=75).contains(&self.start_degrees) && (-75..=75).contains(&self.end_degrees),
+            (-750..=750).contains(&self.start_tenths)
+                && (-750..=750).contains(&self.end_tenths),
             "oscillation positions must be between -75 and 75 degrees"
         );
         anyhow::ensure!(
-            self.start_degrees < self.end_degrees,
+            self.start_tenths < self.end_tenths,
             "oscillation start must be lower than end"
         );
-        let span: u16 = (self.end_degrees as i16 - self.start_degrees as i16).try_into()?;
-        let position = 900i16 - (self.start_degrees as i16 + self.end_degrees as i16) * 5;
+        anyhow::ensure!(
+            self.start_tenths % 5 == 0 && self.end_tenths % 5 == 0,
+            "oscillation positions must use half-degree steps"
+        );
+        let width_tenths = self.end_tenths - self.start_tenths;
+        anyhow::ensure!(
+            width_tenths % 10 == 0,
+            "oscillation span must be a whole number of degrees"
+        );
+        let center_sum = self.start_tenths + self.end_tenths;
+        anyhow::ensure!(
+            center_sum % 2 == 0,
+            "oscillation center cannot be represented by the device"
+        );
+        let span: u16 = (width_tenths / 10).try_into()?;
+        let position = 900i16 - center_sum / 2;
         let position: u16 = position.try_into()?;
         let [position_hi, position_lo] = position.to_be_bytes();
         Ok([
@@ -843,6 +856,147 @@ impl H7105OscillationConfig {
             position_lo,
             self.flags,
         ])
+    }
+
+    pub fn start_degrees(self) -> f32 {
+        self.start_tenths as f32 / 10.0
+    }
+
+    pub fn end_degrees(self) -> f32 {
+        self.end_tenths as f32 / 10.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct H7105AutoConfig {
+    pub on_speed: u8,
+    pub on_temperature_c: u8,
+    pub keep_speed: u8,
+    pub keep_temperature_c: u8,
+    pub oscillating: bool,
+    pub oscillation: H7105OscillationConfig,
+}
+
+impl H7105AutoConfig {
+    pub fn from_packet(packet: [u8; 20]) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            packet[0..3] == [0xaa, 0x05, H7105FanMode::Auto as u8],
+            "not an H7105 Auto configuration packet"
+        );
+        anyhow::ensure!(
+            calculate_checksum(&packet[..19]) == packet[19],
+            "invalid checksum"
+        );
+        let on_temperature_c = h7105_fahrenheit_hundredths_to_celsius(
+            u16::from_be_bytes([packet[4], packet[5]]),
+        )?;
+        let keep_temperature_c = h7105_fahrenheit_hundredths_to_celsius(
+            u16::from_be_bytes([packet[7], packet[8]]),
+        )?;
+        let config = Self {
+            on_speed: packet[3],
+            on_temperature_c,
+            keep_speed: packet[6],
+            keep_temperature_c,
+            oscillating: packet[9] == 1,
+            oscillation: H7105OscillationConfig::from_params(packet[10..15].try_into()?)?,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            (1..=12).contains(&self.on_speed) && (1..=12).contains(&self.keep_speed),
+            "H7105 Auto speeds must be 1 through 12"
+        );
+        anyhow::ensure!(
+            self.on_speed < self.keep_speed,
+            "H7105 Auto On speed must be lower than Keep speed"
+        );
+        anyhow::ensure!(
+            (10..=40).contains(&self.on_temperature_c)
+                && (10..=40).contains(&self.keep_temperature_c),
+            "H7105 Auto temperatures must be 10 through 40 C"
+        );
+        anyhow::ensure!(
+            self.on_temperature_c < self.keep_temperature_c,
+            "H7105 Auto On temperature must be lower than Keep temperature"
+        );
+        Ok(())
+    }
+}
+
+pub fn h7105_celsius_to_fahrenheit_hundredths(celsius: u8) -> anyhow::Result<u16> {
+    anyhow::ensure!(
+        (10..=40).contains(&celsius),
+        "H7105 Auto temperatures must be 10 through 40 C"
+    );
+    Ok(u16::from(celsius) * 180 + 3200)
+}
+
+fn h7105_fahrenheit_hundredths_to_celsius(value: u16) -> anyhow::Result<u8> {
+    anyhow::ensure!((5000..=10400).contains(&value), "invalid H7105 Auto temperature");
+    let rounded = (u32::from(value) - 3200 + 90) / 180;
+    Ok(rounded.try_into()?)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct H7105CustomStageConfig {
+    pub stage: u8,
+    pub active: bool,
+    pub speed: u8,
+    pub duration_minutes: Option<u16>,
+    pub remaining_minutes: Option<u16>,
+    pub oscillating: bool,
+    pub oscillation: H7105OscillationConfig,
+}
+
+impl H7105CustomStageConfig {
+    pub fn from_packet(packet: [u8; 20]) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            packet[0..3] == [0xaa, 0x05, H7105FanMode::Custom as u8],
+            "not an H7105 Custom configuration packet"
+        );
+        anyhow::ensure!(
+            calculate_checksum(&packet[..19]) == packet[19],
+            "invalid checksum"
+        );
+        anyhow::ensure!(packet[3] < 3, "invalid H7105 Custom stage");
+        anyhow::ensure!(matches!(packet[4], 0 | 1), "invalid H7105 active-stage flag");
+        let duration = u16::from_be_bytes([packet[6], packet[7]]);
+        let remaining = u16::from_be_bytes([packet[8], packet[9]]);
+        let speed = packet[10] & 0x0f;
+        let config = Self {
+            stage: packet[3] + 1,
+            active: packet[4] == 1,
+            speed: packet[5],
+            duration_minutes: (duration != u16::MAX).then_some(duration),
+            remaining_minutes: (remaining != u16::MAX).then_some(remaining),
+            oscillating: packet[10] & 0x10 != 0,
+            oscillation: H7105OscillationConfig::from_params([
+                speed, packet[11], packet[12], packet[13], packet[14],
+            ])?,
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(self) -> anyhow::Result<()> {
+        anyhow::ensure!((1..=3).contains(&self.stage), "invalid H7105 Custom stage");
+        anyhow::ensure!((1..=12).contains(&self.speed), "invalid H7105 Custom speed");
+        if self.stage == 3 {
+            anyhow::ensure!(
+                self.duration_minutes.is_none() && self.remaining_minutes.is_none(),
+                "H7105 Custom stage 3 must be indefinite"
+            );
+        } else {
+            anyhow::ensure!(
+                matches!(self.duration_minutes, Some(0..=779)),
+                "H7105 Custom duration must be 00:00 through 12:59"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -1077,6 +1231,11 @@ mod test {
             &SetH7105FanSpeed { speed: 12 },
             GoveeBlePacket::SetH7105FanSpeed(SetH7105FanSpeed { speed: 12 }),
         );
+        assert_eq!(H7105FanMode::Normal as u8, 1);
+        assert_eq!(H7105FanMode::Auto as u8, 2);
+        assert_eq!(H7105FanMode::Sleep as u8, 3);
+        assert_eq!(H7105FanMode::Nature as u8, 4);
+        assert_eq!(H7105FanMode::Custom as u8, 5);
         for mode in H7105FanMode::ALL {
             round_trip(
                 "H7105",
@@ -1135,7 +1294,7 @@ mod test {
                 &[0xaa, 0x05, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xac]
             ),
             GoveeBlePacket::NotifyH7105FanMode(NotifyH7105FanMode {
-                mode: H7105FanMode::Nature,
+                mode: H7105FanMode::Sleep,
             })
         );
         round_trip(
@@ -1163,24 +1322,52 @@ mod test {
             })
         );
         let old_range = H7105OscillationConfig::from_params([3, 90, 4, 176, 1]).unwrap();
-        assert_eq!(old_range.start_degrees, -75);
-        assert_eq!(old_range.end_degrees, 15);
+        assert_eq!(old_range.start_tenths, -750);
+        assert_eq!(old_range.end_tenths, 150);
         assert_eq!(old_range.to_params().unwrap(), [3, 90, 4, 176, 1]);
 
         let new_range = H7105OscillationConfig::from_params([3, 75, 3, 57, 1]).unwrap();
-        assert_eq!(new_range.start_degrees, -30);
-        assert_eq!(new_range.end_degrees, 45);
+        assert_eq!(new_range.start_tenths, -300);
+        assert_eq!(new_range.end_tenths, 450);
         assert_eq!(new_range.to_params().unwrap(), [3, 75, 3, 57, 1]);
 
         let symmetric_low = H7105OscillationConfig::from_params([1, 50, 3, 132, 0]).unwrap();
-        assert_eq!(symmetric_low.start_degrees, -25);
-        assert_eq!(symmetric_low.end_degrees, 25);
+        assert_eq!(symmetric_low.start_tenths, -250);
+        assert_eq!(symmetric_low.end_tenths, 250);
         assert_eq!(symmetric_low.to_params().unwrap(), [1, 50, 3, 132, 0]);
 
         let right_only = H7105OscillationConfig::from_params([1, 30, 1, 194, 1]).unwrap();
-        assert_eq!(right_only.start_degrees, 30);
-        assert_eq!(right_only.end_degrees, 60);
+        assert_eq!(right_only.start_tenths, 300);
+        assert_eq!(right_only.end_tenths, 600);
         assert_eq!(right_only.to_params().unwrap(), [1, 30, 1, 194, 1]);
+
+        let half_degree = H7105OscillationConfig::from_params([1, 65, 3, 132, 0]).unwrap();
+        assert_eq!(half_degree.start_tenths, -325);
+        assert_eq!(half_degree.end_tenths, 325);
+        assert_eq!(half_degree.to_params().unwrap(), [1, 65, 3, 132, 0]);
+
+        let auto_packet: [u8; 20] = finish(vec![
+            0xaa, 0x05, 0x02, 0x03, 0x1d, 0x5f, 0x05, 0x1e, 0xc8, 0x00, 0x01, 0x1e,
+            0x01, 0xc2, 0x01, 0, 0, 0, 0,
+        ])
+        .try_into()
+        .unwrap();
+        let auto = H7105AutoConfig::from_packet(auto_packet).unwrap();
+        assert_eq!(auto.on_temperature_c, 24);
+        assert_eq!(auto.keep_temperature_c, 26);
+        assert_eq!(auto.on_speed, 3);
+        assert_eq!(auto.keep_speed, 5);
+
+        let custom = H7105CustomStageConfig::from_packet([
+            0xaa, 0x05, 0x05, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x02, 0x11, 0x41,
+            0x03, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7e,
+        ])
+        .unwrap();
+        assert_eq!(custom.stage, 1);
+        assert_eq!(custom.duration_minutes, Some(2));
+        assert!(custom.oscillating);
+        assert_eq!(custom.oscillation.start_tenths, -325);
+        assert_eq!(custom.oscillation.end_tenths, 325);
     }
 
     #[test]
