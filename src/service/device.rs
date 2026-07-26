@@ -622,4 +622,17 @@ mod test {
         let device = Device::new("H6127", "ce");
         assert_eq!(device.name(), "H6127_CE");
     }
+
+    #[test]
+    fn h5086_uses_iot_polling() {
+        let device = Device::new("H5086", "AA:BB:CC:DD:EE:FF");
+
+        assert!(device.iot_api_supported());
+        assert!(device.pollable_via_iot());
+        assert!(!device.needs_platform_poll());
+        assert_eq!(
+            device.preferred_poll_interval(),
+            chrono::Duration::seconds(60)
+        );
+    }
 }
