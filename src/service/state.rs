@@ -598,6 +598,7 @@ impl State {
             .undoc_device_info
             .as_ref()
             .context("missing private device metadata")?;
+        let mut commands = Vec::new();
         for packet in packets.into_iter().flatten() {
             anyhow::ensure!(
                 packet[0..2] == [0xaa, 0x05],
@@ -605,10 +606,9 @@ impl State {
             );
             let mut body = packet[..19].to_vec();
             body[0] = 0x3a;
-            let command = Base64HexBytes::with_bytes(body);
-            iot.send_multi_sync(&info.entry, command.base64()).await?;
+            commands.extend(Base64HexBytes::with_bytes(body).base64());
         }
-        Ok(())
+        iot.send_multi_sync(&info.entry, commands).await
     }
 
     pub async fn h7105_set_oscillation(
