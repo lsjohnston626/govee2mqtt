@@ -1,4 +1,4 @@
-use crate::ble::NotifyHumidifierNightlightParams;
+use crate::ble::{H5086PowerReading, NotifyHumidifierNightlightParams};
 use crate::commands::serve::POLL_INTERVAL;
 use crate::lan_api::{DeviceColor, DeviceStatus as LanDeviceStatus, LanDevice};
 use crate::platform_api::{
@@ -35,6 +35,9 @@ pub struct Device {
 
     pub iot_device_status: Option<LanDeviceStatus>,
     pub last_iot_device_status_update: Option<DateTime<Utc>>,
+
+    pub h5086_power_reading: Option<H5086PowerReading>,
+    pub last_h5086_power_reading_update: Option<DateTime<Utc>>,
 
     pub nightlight_state: Option<NotifyHumidifierNightlightParams>,
     pub target_humidity_percent: Option<u8>,
@@ -156,6 +159,10 @@ impl Device {
     }
 
     pub fn preferred_poll_interval(&self) -> chrono::Duration {
+        if self.sku == "H5086" {
+            return chrono::Duration::seconds(60);
+        }
+
         match self.device_type() {
             // If the kettle is on, read its temperature more frequently
             DeviceType::Kettle => {
@@ -213,6 +220,11 @@ impl Device {
         self.iot_device_status.replace(status);
         self.last_iot_device_status_update.replace(Utc::now());
         self.clear_scene_if_color_changed();
+    }
+
+    pub fn set_h5086_power_reading(&mut self, reading: H5086PowerReading) {
+        self.h5086_power_reading.replace(reading);
+        self.last_h5086_power_reading_update.replace(Utc::now());
     }
 
     pub fn set_http_device_info(&mut self, info: HttpDeviceInfo) {
@@ -421,7 +433,7 @@ impl Device {
 
         let device_type = self.device_type();
         match (device_type, self.sku.as_str()) {
-            (_, "H7160") => false,
+            (_, "H5086" | "H7160") => false,
             (DeviceType::Humidifier, _) => true,
             (DeviceType::Light, _) => false,
             (DeviceType::Kettle, _) => true,
@@ -440,7 +452,7 @@ impl Device {
         let device_type = self.device_type();
         matches!(
             (device_type, self.sku.as_str()),
-            (_, "H7160") | (DeviceType::Light, _)
+            (_, "H5086" | "H7160") | (DeviceType::Light, _)
         )
     }
 
@@ -609,5 +621,18 @@ mod test {
 
         let device = Device::new("H6127", "ce");
         assert_eq!(device.name(), "H6127_CE");
+    }
+
+    #[test]
+    fn h5086_uses_iot_polling() {
+        let device = Device::new("H5086", "AA:BB:CC:DD:EE:FF");
+
+        assert!(device.iot_api_supported());
+        assert!(device.pollable_via_iot());
+        assert!(!device.needs_platform_poll());
+        assert_eq!(
+            device.preferred_poll_interval(),
+            chrono::Duration::seconds(60)
+        );
     }
 }

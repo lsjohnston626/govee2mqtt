@@ -225,6 +225,13 @@ impl PacketManager {
             b,
         ));
         all_codecs.push(PacketCodec::new(
+            &["H5086"],
+            |_reading: &H5086PowerReading| {
+                anyhow::bail!("H5086 power readings are device notifications")
+            },
+            H5086PowerReading::decode,
+        ));
+        all_codecs.push(PacketCodec::new(
             &["Generic:Light"],
             SetSceneCode::encode,
             SetSceneCode::decode,
@@ -423,9 +430,67 @@ pub struct SetDevicePower {
     pub on: bool,
 }
 
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct H5086PowerReading {
+    pub powered_on_seconds: u32,
+    pub energy_deci_watt_hours: u32,
+    pub voltage_centivolts: u16,
+    pub current_centi_amps: u16,
+    pub power_centi_watts: u32,
+    pub power_factor_percent: u8,
+}
+
+impl H5086PowerReading {
+    fn u24_be(data: &[u8]) -> u32 {
+        u32::from_be_bytes([0, data[0], data[1], data[2]])
+    }
+
+    fn decode(data: &[u8]) -> anyhow::Result<GoveeBlePacket> {
+        anyhow::ensure!(data.len() == 20, "expected a 20-byte H5086 packet");
+        anyhow::ensure!(
+            matches!(data[0], 0xaa | 0xee) && data[1] == 0x19,
+            "not an H5086 power reading"
+        );
+        anyhow::ensure!(
+            calculate_checksum(&data[..19]) == data[19],
+            "invalid H5086 packet checksum"
+        );
+
+        Ok(GoveeBlePacket::H5086PowerReading(Self {
+            powered_on_seconds: Self::u24_be(&data[2..5]),
+            energy_deci_watt_hours: Self::u24_be(&data[5..8]),
+            voltage_centivolts: u16::from_be_bytes([data[8], data[9]]),
+            current_centi_amps: u16::from_be_bytes([data[10], data[11]]),
+            power_centi_watts: Self::u24_be(&data[12..15]),
+            power_factor_percent: data[15],
+        }))
+    }
+
+    pub fn energy_watt_hours(self) -> f64 {
+        self.energy_deci_watt_hours as f64 / 10.0
+    }
+
+    pub fn voltage(self) -> f64 {
+        self.voltage_centivolts as f64 / 100.0
+    }
+
+    pub fn current(self) -> f64 {
+        self.current_centi_amps as f64 / 100.0
+    }
+
+    pub fn power(self) -> f64 {
+        self.power_centi_watts as f64 / 100.0
+    }
+
+    pub fn power_factor_percent(self) -> u8 {
+        self.power_factor_percent.min(100)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GoveeBlePacket {
     Generic(HexBytes),
+    H5086PowerReading(H5086PowerReading),
     #[allow(unused)] // can remove if/when SetSceneCode::decode has an impl
     SetSceneCode(SetSceneCode),
     SetDevicePower(SetDevicePower),
@@ -577,6 +642,34 @@ mod test {
                 b: 42,
                 brightness: 100,
             }),
+        );
+    }
+
+    #[test]
+    fn decode_h5086_power_reading() {
+        let packet = vec![
+            0xee, 0x19, 0x00, 0x19, 0x8b, 0x00, 0x00, 0x26, 0x2f, 0x3d, 0x00, 0x91, 0x00, 0x44,
+            0x65, 0x64, 0x00, 0x00, 0x00, 0x85,
+        ];
+
+        assert_eq!(
+            MGR.decode_for_sku("H5086", &packet),
+            GoveeBlePacket::H5086PowerReading(H5086PowerReading {
+                powered_on_seconds: 6539,
+                energy_deci_watt_hours: 38,
+                voltage_centivolts: 12093,
+                current_centi_amps: 145,
+                power_centi_watts: 17509,
+                power_factor_percent: 100,
+            })
+        );
+        assert_eq!(
+            H5086PowerReading {
+                power_factor_percent: 101,
+                ..Default::default()
+            }
+            .power_factor_percent(),
+            100
         );
     }
 

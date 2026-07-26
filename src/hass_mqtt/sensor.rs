@@ -92,6 +92,121 @@ impl GlobalFixedDiagnostic {
     }
 }
 
+#[derive(Clone, Copy)]
+enum H5086MeasurementKind {
+    Power,
+    Current,
+    Voltage,
+    Energy,
+    PowerFactor,
+}
+
+#[derive(Clone)]
+pub struct H5086Measurement {
+    sensor: SensorConfig,
+    device_id: String,
+    state: StateHandle,
+    kind: H5086MeasurementKind,
+}
+
+impl H5086Measurement {
+    pub fn all(device: &ServiceDevice, state: &StateHandle) -> Vec<Self> {
+        [
+            (
+                H5086MeasurementKind::Power,
+                "Power",
+                "power",
+                "W",
+                StateClass::Measurement,
+            ),
+            (
+                H5086MeasurementKind::Current,
+                "Current",
+                "current",
+                "A",
+                StateClass::Measurement,
+            ),
+            (
+                H5086MeasurementKind::Voltage,
+                "Voltage",
+                "voltage",
+                "V",
+                StateClass::Measurement,
+            ),
+            (
+                H5086MeasurementKind::Energy,
+                "Energy",
+                "energy",
+                "Wh",
+                StateClass::TotalIncreasing,
+            ),
+            (
+                H5086MeasurementKind::PowerFactor,
+                "Power Factor",
+                "power_factor",
+                "%",
+                StateClass::Measurement,
+            ),
+        ]
+        .into_iter()
+        .map(|(kind, name, device_class, unit, state_class)| {
+            let unique_id = format!(
+                "sensor-{id}-h5086-{device_class}",
+                id = topic_safe_id(device)
+            );
+            Self {
+                sensor: SensorConfig {
+                    base: EntityConfig {
+                        availability_topic: availability_topic(),
+                        name: Some(name.to_string()),
+                        entity_category: None,
+                        origin: Origin::default(),
+                        device: Device::for_device(device),
+                        unique_id: unique_id.clone(),
+                        device_class: Some(device_class),
+                        icon: None,
+                    },
+                    state_topic: format!("gv2mqtt/sensor/{unique_id}/state"),
+                    state_class: Some(state_class),
+                    unit_of_measurement: Some(unit),
+                    json_attributes_topic: None,
+                },
+                device_id: device.id.to_string(),
+                state: state.clone(),
+                kind,
+            }
+        })
+        .collect()
+    }
+}
+
+#[async_trait]
+impl EntityInstance for H5086Measurement {
+    async fn publish_config(&self, state: &StateHandle, client: &HassClient) -> anyhow::Result<()> {
+        self.sensor.publish(state, client).await
+    }
+
+    async fn notify_state(&self, client: &HassClient) -> anyhow::Result<()> {
+        let device = self
+            .state
+            .device_by_id(&self.device_id)
+            .await
+            .expect("device to exist");
+        let Some(reading) = device.h5086_power_reading else {
+            return Ok(());
+        };
+
+        let value = match self.kind {
+            H5086MeasurementKind::Power => format!("{:.2}", reading.power()),
+            H5086MeasurementKind::Current => format!("{:.2}", reading.current()),
+            H5086MeasurementKind::Voltage => format!("{:.2}", reading.voltage()),
+            H5086MeasurementKind::Energy => format!("{:.1}", reading.energy_watt_hours()),
+            H5086MeasurementKind::PowerFactor => reading.power_factor_percent().to_string(),
+        };
+        self.sensor.notify_state(client, &value).await
+    }
+}
+
 #[derive(Clone)]
 pub struct CapabilitySensor {
     sensor: SensorConfig,
