@@ -156,7 +156,10 @@ pub async fn mqtt_h7105_preset(
     Params(FanId { id }): Params<FanId>,
     State(state): State<StateHandle>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(payload.eq_ignore_ascii_case("auto"), "unsupported H7105 preset {payload:?}");
+    anyhow::ensure!(
+        payload.eq_ignore_ascii_case("auto"),
+        "unsupported H7105 preset {payload:?}"
+    );
     let device = state.resolve_device_for_control(&id).await?;
     state.h7105_set_auto(&device).await?;
     state.poll_iot_api(&device).await?;

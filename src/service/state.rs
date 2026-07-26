@@ -308,10 +308,7 @@ impl State {
         device: &Device,
         on: bool,
     ) -> anyhow::Result<()> {
-        if self
-            .try_set_nightlight(device, |p| p.on = on)
-            .await?
-        {
+        if self.try_set_nightlight(device, |p| p.on = on).await? {
             return Ok(());
         }
 
@@ -541,8 +538,14 @@ impl State {
     ) -> anyhow::Result<()> {
         anyhow::ensure!(device.sku == "H7105", "not an H7105 device");
         let command = Base64HexBytes::encode_for_sku(&device.sku, &SetDevicePower { on })?;
-        let iot = self.get_iot_client().await.context("IoT client unavailable")?;
-        let info = device.undoc_device_info.as_ref().context("missing private device metadata")?;
+        let iot = self
+            .get_iot_client()
+            .await
+            .context("IoT client unavailable")?;
+        let info = device
+            .undoc_device_info
+            .as_ref()
+            .context("missing private device metadata")?;
         iot.send_real(&info.entry, command.base64()).await
     }
 
@@ -551,20 +554,32 @@ impl State {
         device: &Device,
         speed: u8,
     ) -> anyhow::Result<()> {
-        anyhow::ensure!((1..=12).contains(&speed), "H7105 speed must be 1 through 12");
+        anyhow::ensure!(
+            (1..=12).contains(&speed),
+            "H7105 speed must be 1 through 12"
+        );
         let command = Base64HexBytes::encode_for_sku(&device.sku, &SetH7105FanSpeed { speed })?;
-        let iot = self.get_iot_client().await.context("IoT client unavailable")?;
-        let info = device.undoc_device_info.as_ref().context("missing private device metadata")?;
+        let iot = self
+            .get_iot_client()
+            .await
+            .context("IoT client unavailable")?;
+        let info = device
+            .undoc_device_info
+            .as_ref()
+            .context("missing private device metadata")?;
         iot.send_real(&info.entry, command.base64()).await
     }
 
-    pub async fn h7105_set_auto(
-        self: &Arc<Self>,
-        device: &Device,
-    ) -> anyhow::Result<()> {
+    pub async fn h7105_set_auto(self: &Arc<Self>, device: &Device) -> anyhow::Result<()> {
         let command = Base64HexBytes::encode_for_sku(&device.sku, &SetH7105FanAutoMode)?;
-        let iot = self.get_iot_client().await.context("IoT client unavailable")?;
-        let info = device.undoc_device_info.as_ref().context("missing private device metadata")?;
+        let iot = self
+            .get_iot_client()
+            .await
+            .context("IoT client unavailable")?;
+        let info = device
+            .undoc_device_info
+            .as_ref()
+            .context("missing private device metadata")?;
         iot.send_real(&info.entry, command.base64()).await
     }
 
