@@ -407,7 +407,10 @@ pub async fn mqtt_h7105_oscillation_angle(
     Params(FanOscillationAngleParams { id, side }): Params<FanOscillationAngleParams>,
     State(state): State<StateHandle>,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!((-75..=75).contains(&value) && value % 5 == 0, "invalid H7105 angle");
+    anyhow::ensure!(
+        (-75..=75).contains(&value) && value % 5 == 0,
+        "invalid H7105 angle"
+    );
     let device = state.resolve_device_for_control(&id).await?;
     let fan = device.h7105_fan_state;
     let mut config = H7105OscillationConfig::from_params(

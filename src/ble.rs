@@ -825,8 +825,7 @@ impl H7105OscillationConfig {
     pub fn to_params(self) -> anyhow::Result<[u8; 5]> {
         anyhow::ensure!(matches!(self.speed, 1 | 3), "invalid oscillation speed");
         anyhow::ensure!(
-            (-75..=75).contains(&self.start_degrees)
-                && (-75..=75).contains(&self.end_degrees),
+            (-75..=75).contains(&self.start_degrees) && (-75..=75).contains(&self.end_degrees),
             "oscillation positions must be between -75 and 75 degrees"
         );
         anyhow::ensure!(
@@ -834,8 +833,7 @@ impl H7105OscillationConfig {
             "oscillation start must be lower than end"
         );
         let span: u16 = (self.end_degrees as i16 - self.start_degrees as i16).try_into()?;
-        let position =
-            900i16 - (self.start_degrees as i16 + self.end_degrees as i16) * 5;
+        let position = 900i16 - (self.start_degrees as i16 + self.end_degrees as i16) * 5;
         let position: u16 = position.try_into()?;
         let [position_hi, position_lo] = position.to_be_bytes();
         Ok([

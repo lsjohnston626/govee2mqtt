@@ -678,8 +678,8 @@ mod test {
             device.cache_h7105_mode_config(&packet);
         }
 
-        let cached = device.h7105_fan_state.mode_config_packets
-            [(H7105FanMode::Custom as usize) - 1];
+        let cached =
+            device.h7105_fan_state.mode_config_packets[(H7105FanMode::Custom as usize) - 1];
         assert_eq!(cached[0].unwrap()[3], 0);
         assert_eq!(cached[1].unwrap()[3], 1);
         assert_eq!(cached[2].unwrap()[3], 2);
