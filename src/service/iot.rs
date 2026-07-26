@@ -1,6 +1,4 @@
-use crate::ble::{
-    Base64HexBytes, GoveeBlePacket, HumidifierAutoMode, NotifyHumidifierMode,
-};
+use crate::ble::{Base64HexBytes, GoveeBlePacket, HumidifierAutoMode, NotifyHumidifierMode};
 use crate::lan_api::{DeviceColor, DeviceStatus};
 use crate::platform_api::from_json;
 use crate::service::state::StateHandle;
@@ -187,7 +185,10 @@ impl IotClient {
         command: &str,
         commands: Vec<String>,
     ) -> anyhow::Result<()> {
-        log::trace!("send_packet_command {command} for {} to {commands:?}", device.device);
+        log::trace!(
+            "send_packet_command {command} for {} to {commands:?}",
+            device.device
+        );
         let device_topic = device.device_topic()?;
 
         self.client
@@ -225,7 +226,8 @@ impl IotClient {
         device: &DeviceEntry,
         commands: Vec<String>,
     ) -> anyhow::Result<()> {
-        self.send_packet_command(device, "multiSync", commands).await
+        self.send_packet_command(device, "multiSync", commands)
+            .await
     }
 
     pub async fn activate_one_click(&self, item: &ParsedOneClick) -> anyhow::Result<()> {
@@ -474,18 +476,24 @@ async fn run_iot_subscriber(
                                                 device.set_h7105_oscillation(update.oscillating);
                                             }
                                             GoveeBlePacket::NotifyH7105NightlightState(update) => {
-                                                let mut nightlight = device.nightlight_state.unwrap_or_default();
+                                                let mut nightlight =
+                                                    device.nightlight_state.unwrap_or_default();
                                                 nightlight.on = update.on;
                                                 nightlight.brightness = update.brightness;
                                                 state.brightness = update.brightness;
                                                 device.set_nightlight_state(nightlight);
                                             }
                                             GoveeBlePacket::NotifyH7105NightlightColor(update) => {
-                                                let mut nightlight = device.nightlight_state.unwrap_or_default();
+                                                let mut nightlight =
+                                                    device.nightlight_state.unwrap_or_default();
                                                 nightlight.r = update.r;
                                                 nightlight.g = update.g;
                                                 nightlight.b = update.b;
-                                                state.color = DeviceColor { r: update.r, g: update.g, b: update.b };
+                                                state.color = DeviceColor {
+                                                    r: update.r,
+                                                    g: update.g,
+                                                    b: update.b,
+                                                };
                                                 device.set_nightlight_state(nightlight);
                                             }
                                             GoveeBlePacket::Generic(_) => {
