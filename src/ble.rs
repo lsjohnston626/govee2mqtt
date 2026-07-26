@@ -731,7 +731,7 @@ pub struct NotifyH7105NightlightColor {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct SetH7105Oscillation {
     pub oscillating: bool,
-    pub params: [u8; 4],
+    pub params: [u8; 5],
 }
 
 impl SetH7105Oscillation {
@@ -748,7 +748,7 @@ impl SetH7105Oscillation {
         anyhow::ensure!(calculate_checksum(&data[..19]) == data[19], "invalid checksum");
         Ok(GoveeBlePacket::SetH7105Oscillation(Self {
             oscillating: data[2] == 0x01,
-            params: data[3..7].try_into()?,
+            params: data[3..8].try_into()?,
         }))
     }
 }
@@ -756,7 +756,7 @@ impl SetH7105Oscillation {
 #[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub struct NotifyH7105Oscillation {
     pub oscillating: bool,
-    pub params: [u8; 4],
+    pub params: [u8; 5],
 }
 
 impl NotifyH7105Oscillation {
@@ -772,7 +772,7 @@ impl NotifyH7105Oscillation {
         );
         Ok(GoveeBlePacket::NotifyH7105Oscillation(Self {
             oscillating: data[2] == 0x01,
-            params: data[3..7].try_into()?,
+            params: data[3..8].try_into()?,
         }))
     }
 }
@@ -1041,11 +1041,11 @@ mod test {
             "H7105",
             &SetH7105Oscillation {
                 oscillating: true,
-                params: [0x03, 0x5a, 0x04, 0xb0],
+                params: [0x03, 0x5a, 0x04, 0xb0, 0x01],
             },
             GoveeBlePacket::SetH7105Oscillation(SetH7105Oscillation {
                 oscillating: true,
-                params: [0x03, 0x5a, 0x04, 0xb0],
+                params: [0x03, 0x5a, 0x04, 0xb0, 0x01],
             }),
         );
         assert_eq!(
@@ -1058,7 +1058,7 @@ mod test {
             ),
             GoveeBlePacket::NotifyH7105Oscillation(NotifyH7105Oscillation {
                 oscillating: false,
-                params: [0x03, 0x5a, 0x04, 0xb0],
+                params: [0x03, 0x5a, 0x04, 0xb0, 0x01],
             })
         );
     }

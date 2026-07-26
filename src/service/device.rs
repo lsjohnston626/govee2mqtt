@@ -16,7 +16,7 @@ pub struct H7105FanState {
     pub speed: Option<u8>,
     pub mode: Option<H7105FanMode>,
     pub oscillating: Option<bool>,
-    pub oscillation_params: Option<[u8; 4]>,
+    pub oscillation_params: Option<[u8; 5]>,
 }
 
 #[derive(Default, Clone, Debug)]
@@ -205,7 +205,7 @@ impl Device {
         self.h7105_fan_state.mode.replace(mode);
     }
 
-    pub fn set_h7105_oscillation(&mut self, oscillating: bool, params: [u8; 4]) {
+    pub fn set_h7105_oscillation(&mut self, oscillating: bool, params: [u8; 5]) {
         self.h7105_fan_state.oscillating.replace(oscillating);
         self.h7105_fan_state.oscillation_params.replace(params);
     }
