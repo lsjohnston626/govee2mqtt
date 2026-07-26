@@ -612,34 +612,6 @@ impl State {
         Ok(())
     }
 
-    pub async fn h7105_write_custom_config(
-        self: &Arc<Self>,
-        device: &Device,
-        packets: [Option<[u8; 20]>; 3],
-    ) -> anyhow::Result<()> {
-        anyhow::ensure!(device.sku == "H7105", "not an H7105 device");
-        let iot = self
-            .get_iot_client()
-            .await
-            .context("IoT client unavailable")?;
-        let info = device
-            .undoc_device_info
-            .as_ref()
-            .context("missing private device metadata")?;
-        for packet in packets.into_iter().flatten() {
-            anyhow::ensure!(
-                packet[0..3] == [0xaa, 0x05, H7105FanMode::Custom as u8],
-                "invalid H7105 Custom configuration packet"
-            );
-            let mut body = packet[..19].to_vec();
-            body[0] = 0x33;
-            let command = Base64HexBytes::with_bytes(body);
-            iot.send_real(&info.entry, command.base64()).await?;
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        }
-        Ok(())
-    }
-
     pub async fn h7105_set_oscillation(
         self: &Arc<Self>,
         device: &Device,

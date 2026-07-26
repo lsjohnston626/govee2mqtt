@@ -2,9 +2,8 @@ use crate::hass_mqtt::base::{Device, EntityConfig, Origin};
 use crate::hass_mqtt::button::ButtonConfig;
 use crate::hass_mqtt::climate::TargetTemperatureEntity;
 use crate::hass_mqtt::fan::{
-    H7105AutoNumber, H7105AutoOscillationSpeed, H7105AutoSwitch, H7105CustomNumber,
-    H7105CustomOscillationSpeed, H7105CustomSensor, H7105CustomSwitch, H7105Fan,
-    H7105OscillationAngle, H7105OscillationSpeed, H7105OscillationSymmetric,
+    H7105AutoNumber, H7105AutoOscillationSpeed, H7105AutoSwitch, H7105CustomSensor,
+    H7105Fan, H7105OscillationAngle, H7105OscillationSpeed, H7105OscillationSymmetric,
 };
 use crate::hass_mqtt::humidifier::Humidifier;
 use crate::hass_mqtt::instance::EntityList;
@@ -177,15 +176,6 @@ pub async fn enumerate_entities_for_device(
             entities.add(entity);
         }
         entities.add(H7105AutoOscillationSpeed::new(d, state));
-        for entity in H7105CustomNumber::all(d, state) {
-            entities.add(entity);
-        }
-        for entity in H7105CustomSwitch::all(d, state) {
-            entities.add(entity);
-        }
-        for entity in H7105CustomOscillationSpeed::all(d, state) {
-            entities.add(entity);
-        }
         for entity in H7105CustomSensor::all(d, state) {
             entities.add(entity);
         }
