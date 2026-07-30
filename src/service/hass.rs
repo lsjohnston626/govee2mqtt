@@ -16,9 +16,9 @@ use mosquitto_rs::router::{MqttRouter, Params, Payload, State};
 use mosquitto_rs::{Client, Event, QoS};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-const HASS_REGISTER_DELAY: tokio::time::Duration = tokio::time::Duration::from_secs(15);
+const HASS_REGISTER_DELAY: Duration = Duration::from_secs(15);
 
 #[derive(clap::Parser, Debug)]
 pub struct HassArguments {
@@ -113,11 +113,24 @@ pub struct HassClient {
 
 impl HassClient {
     async fn register_with_hass(&self, state: &StateHandle) -> anyhow::Result<()> {
+        let registration_started = Instant::now();
+        let phase_started = Instant::now();
         let entities = enumerate_all_entites(state).await?;
+        log::info!(
+            "Home Assistant registration enumerated {} entities in {:?}",
+            entities.len(),
+            phase_started.elapsed()
+        );
 
         // Register the configs
         log::trace!("register_with_hass: register entities");
+        let phase_started = Instant::now();
         entities.publish_config(state, self).await?;
+        log::info!(
+            "Published {} Home Assistant entity configs in {:?}",
+            entities.len(),
+            phase_started.elapsed()
+        );
 
         // Allow hass extra time to register the entities before
         // we mark them as available
@@ -136,7 +149,15 @@ impl HassClient {
 
         // report initial state
         log::trace!("register_with_hass: reporting state");
+        let phase_started = Instant::now();
         entities.notify_state(self).await.context("notify_state")?;
+        log::info!(
+            "Published initial state for {} Home Assistant entities in {:?}; \
+            registration completed in {:?}",
+            entities.len(),
+            phase_started.elapsed(),
+            registration_started.elapsed()
+        );
 
         log::trace!("register_with_hass: done");
 
@@ -505,13 +526,19 @@ async fn run_mqtt_loop(
     subscriber: Receiver<Event>,
     client: Client,
 ) -> anyhow::Result<()> {
-    // Give LAN disco a chance to get current state before
-    // we register with hass
-    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    // Give LAN disco a chance to get current state before we register with
+    // Home Assistant. There is nothing to wait for when LAN is disabled.
+    if state.get_lan_client().await.is_some() {
+        log::info!("Waiting 5s for LAN state before Home Assistant registration");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    } else {
+        log::info!("LAN discovery is disabled; skipping registration grace period");
+    }
 
     async fn rebuild_router(
         client: &Client,
         state: &StateHandle,
+        registration_delay: Duration,
     ) -> anyhow::Result<Arc<MqttRouter<StateHandle>>> {
         let disco_prefix = state.get_hass_disco_prefix().await;
         let mut router: MqttRouter<StateHandle> = MqttRouter::new(client.clone());
@@ -569,7 +596,12 @@ async fn run_mqtt_loop(
             .route("gv2mqtt/:id/set-mode-scene", mqtt_set_mode_scene)
             .await?;
 
-        tokio::time::sleep(HASS_REGISTER_DELAY).await;
+        if !registration_delay.is_zero() {
+            log::info!(
+                "Waiting {registration_delay:?} before re-registering Home Assistant entities"
+            );
+            tokio::time::sleep(registration_delay).await;
+        }
         state
             .get_hass_client()
             .await
@@ -581,7 +613,7 @@ async fn run_mqtt_loop(
         Ok(Arc::new(router))
     }
 
-    let mut router = rebuild_router(&client, &state).await?;
+    let mut router = rebuild_router(&client, &state, Duration::ZERO).await?;
     let mut need_rebuild = false;
 
     while let Ok(event) = subscriber.recv().await {
@@ -602,7 +634,7 @@ async fn run_mqtt_loop(
             Event::Connected(status) => {
                 log::info!("MQTT connected with status={status}");
                 if need_rebuild {
-                    router = rebuild_router(&client, &state).await?;
+                    router = rebuild_router(&client, &state, HASS_REGISTER_DELAY).await?;
                 }
             }
         }
