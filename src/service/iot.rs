@@ -179,12 +179,16 @@ impl IotClient {
         Ok(())
     }
 
-    pub async fn send_real(
+    async fn send_packet_command(
         &self,
         device: &DeviceEntry,
+        command: &str,
         commands: Vec<String>,
     ) -> anyhow::Result<()> {
-        log::trace!("send_real for {} to {commands:?}", device.device);
+        log::trace!(
+            "send_packet_command {command} for {} to {commands:?}",
+            device.device
+        );
         let device_topic = device.device_topic()?;
 
         self.client
@@ -192,7 +196,7 @@ impl IotClient {
                 device_topic,
                 serde_json::to_string(&serde_json::json!({
                     "msg": {
-                        "cmd": "ptReal",
+                        "cmd": command,
                         "data": {
                             "command": commands,
                         },
@@ -205,8 +209,25 @@ impl IotClient {
                 false,
             )
             .await
-            .context("IotClient::send_real")?;
+            .context("IotClient::send_packet_command")?;
         Ok(())
+    }
+
+    pub async fn send_real(
+        &self,
+        device: &DeviceEntry,
+        commands: Vec<String>,
+    ) -> anyhow::Result<()> {
+        self.send_packet_command(device, "ptReal", commands).await
+    }
+
+    pub async fn send_multi_sync(
+        &self,
+        device: &DeviceEntry,
+        commands: Vec<String>,
+    ) -> anyhow::Result<()> {
+        self.send_packet_command(device, "multiSync", commands)
+            .await
     }
 
     pub async fn activate_one_click(&self, item: &ParsedOneClick) -> anyhow::Result<()> {
@@ -416,6 +437,7 @@ async fn run_iot_subscriber(
 
                                 if let Some(op) = &packet.op {
                                     for cmd in &op.command {
+                                        device.cache_h7105_mode_config(cmd.bytes());
                                         let decoded = cmd.decode_for_sku(sku);
                                         log::debug!("Decoded: {decoded:?} for {sku}");
                                         match decoded {
@@ -445,11 +467,54 @@ async fn run_iot_subscriber(
                                             GoveeBlePacket::H5086PowerReading(reading) => {
                                                 device.set_h5086_power_reading(reading);
                                             }
+                                            GoveeBlePacket::NotifyH7105FanSpeed(update) => {
+                                                if device.h7105_fan_state.mode
+                                                    == Some(crate::ble::H7105FanMode::Normal)
+                                                {
+                                                    device.set_h7105_speed(update.speed);
+                                                }
+                                            }
+                                            GoveeBlePacket::NotifyH7105FanMode(update) => {
+                                                device.set_h7105_mode(update.mode);
+                                            }
+                                            GoveeBlePacket::NotifyH7105Oscillation(update) => {
+                                                device.set_h7105_oscillation(
+                                                    update.oscillating,
+                                                    update.params,
+                                                );
+                                            }
+                                            GoveeBlePacket::NotifyH7105NightlightState(update) => {
+                                                let mut nightlight =
+                                                    device.nightlight_state.unwrap_or_default();
+                                                nightlight.on = update.on;
+                                                nightlight.brightness = update.brightness;
+                                                state.brightness = update.brightness;
+                                                device.set_nightlight_state(nightlight);
+                                            }
+                                            GoveeBlePacket::NotifyH7105NightlightColor(update) => {
+                                                let mut nightlight =
+                                                    device.nightlight_state.unwrap_or_default();
+                                                nightlight.r = update.r;
+                                                nightlight.g = update.g;
+                                                nightlight.b = update.b;
+                                                state.color = DeviceColor {
+                                                    r: update.r,
+                                                    g: update.g,
+                                                    b: update.b,
+                                                };
+                                                device.set_nightlight_state(nightlight);
+                                            }
                                             GoveeBlePacket::Generic(_) => {
                                                 // Ignore packets that we can't decode
                                             }
                                             GoveeBlePacket::SetHumidifierMode(_)
-                                            | GoveeBlePacket::SetHumidifierNightlight(_) => {
+                                            | GoveeBlePacket::SetHumidifierNightlight(_)
+                                            | GoveeBlePacket::SetH7105FanSpeed(_)
+                                            | GoveeBlePacket::SetH7105FanMode(_)
+                                            | GoveeBlePacket::SetH7105Oscillation(_)
+                                            | GoveeBlePacket::SetH7105NightlightPower(_)
+                                            | GoveeBlePacket::SetH7105NightlightBrightness(_)
+                                            | GoveeBlePacket::SetH7105NightlightColor(_) => {
                                                 // Ignore packets that are essentially echoing
                                                 // commands sent to the device
                                             }

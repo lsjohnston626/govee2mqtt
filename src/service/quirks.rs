@@ -178,6 +178,11 @@ fn load_quirks() -> HashMap<String, Quirk> {
     for quirk in [
         Quirk::device("H5086", DeviceType::Socket, "mdi:power-socket-us")
             .with_iot_api_support(true),
+        Quirk::device("H7105", DeviceType::Fan, "mdi:fan")
+            .with_broken_platform()
+            .with_iot_api_support(true)
+            .with_rgb()
+            .with_brightness(),
         // H60A1 Govee Ceiling Light has a color temperature range of 2200K - 6500K
         // Without this quirk, the LAN API fallback reports (2000, 9000) which causes issues
         // <https://github.com/wez/govee2mqtt/pull/502>

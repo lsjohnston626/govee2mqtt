@@ -1,4 +1,7 @@
-use crate::ble::{H5086PowerReading, NotifyHumidifierNightlightParams};
+use crate::ble::{
+    H5086PowerReading, H7105AutoConfig, H7105CustomStageConfig, H7105FanMode,
+    NotifyHumidifierNightlightParams,
+};
 use crate::commands::serve::POLL_INTERVAL;
 use crate::lan_api::{DeviceColor, DeviceStatus as LanDeviceStatus, LanDevice};
 use crate::platform_api::{
@@ -10,6 +13,15 @@ use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::net::IpAddr;
+
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct H7105FanState {
+    pub speed: Option<u8>,
+    pub mode: Option<H7105FanMode>,
+    pub oscillating: Option<bool>,
+    pub oscillation_params: Option<[u8; 5]>,
+    pub mode_config_packets: [[Option<[u8; 20]>; 3]; 5],
+}
 
 #[derive(Default, Clone, Debug)]
 pub struct Device {
@@ -39,6 +51,7 @@ pub struct Device {
     pub h5086_power_reading: Option<H5086PowerReading>,
     pub last_h5086_power_reading_update: Option<DateTime<Utc>>,
 
+    pub h7105_fan_state: H7105FanState,
     pub nightlight_state: Option<NotifyHumidifierNightlightParams>,
     pub target_humidity_percent: Option<u8>,
     pub humidifier_work_mode: Option<u8>,
@@ -159,7 +172,7 @@ impl Device {
     }
 
     pub fn preferred_poll_interval(&self) -> chrono::Duration {
-        if self.sku == "H5086" {
+        if matches!(self.sku.as_str(), "H5086" | "H7105") {
             return chrono::Duration::seconds(60);
         }
 
@@ -186,6 +199,84 @@ impl Device {
 
     pub fn set_nightlight_state(&mut self, params: NotifyHumidifierNightlightParams) {
         self.nightlight_state.replace(params);
+    }
+
+    pub fn set_h7105_speed(&mut self, speed: u8) {
+        self.h7105_fan_state.speed.replace(speed);
+    }
+
+    pub fn set_h7105_mode(&mut self, mode: H7105FanMode) {
+        self.h7105_fan_state.mode.replace(mode);
+    }
+
+    pub fn cache_h7105_mode_config(&mut self, data: &[u8]) {
+        if self.sku != "H7105" || data.len() != 20 || data[0..2] != [0xaa, 0x05] {
+            return;
+        }
+        let Some(mode_index) = data[2].checked_sub(1).filter(|index| *index < 5) else {
+            return;
+        };
+        let line_index = if data[2] == H7105FanMode::Custom as u8 {
+            data[3] as usize
+        } else {
+            0
+        };
+        if line_index >= 3 {
+            return;
+        }
+        let mut packet = [0u8; 20];
+        packet.copy_from_slice(data);
+        self.h7105_fan_state.mode_config_packets[mode_index as usize][line_index] = Some(packet);
+
+        let Ok(mode) = H7105FanMode::try_from(data[2]) else {
+            return;
+        };
+        if self.h7105_fan_state.mode != Some(mode) {
+            return;
+        }
+        match mode {
+            H7105FanMode::Normal | H7105FanMode::Sleep | H7105FanMode::Nature => {
+                self.h7105_fan_state.speed.replace(data[3]);
+                self.set_h7105_oscillation(data[4] == 1, data[5..10].try_into().unwrap());
+            }
+            H7105FanMode::Auto => {
+                self.set_h7105_oscillation(data[9] == 1, data[10..15].try_into().unwrap());
+            }
+            H7105FanMode::Custom if data[4] == 1 => {
+                self.h7105_fan_state.speed.replace(data[5]);
+                self.set_h7105_oscillation(
+                    data[10] & 0x10 != 0,
+                    [data[10] & 0x0f, data[11], data[12], data[13], data[14]],
+                );
+            }
+            H7105FanMode::Custom => {}
+        }
+    }
+
+    pub fn h7105_auto_config(&self) -> anyhow::Result<H7105AutoConfig> {
+        let packet = self.h7105_fan_state.mode_config_packets[(H7105FanMode::Auto as usize) - 1][0]
+            .ok_or_else(|| anyhow::anyhow!("H7105 Auto configuration unavailable"))?;
+        H7105AutoConfig::from_packet(packet)
+    }
+
+    pub fn h7105_custom_stages(&self) -> anyhow::Result<[H7105CustomStageConfig; 3]> {
+        let packets = self.h7105_fan_state.mode_config_packets[(H7105FanMode::Custom as usize) - 1];
+        Ok([
+            H7105CustomStageConfig::from_packet(
+                packets[0].ok_or_else(|| anyhow::anyhow!("H7105 Custom stage 1 unavailable"))?,
+            )?,
+            H7105CustomStageConfig::from_packet(
+                packets[1].ok_or_else(|| anyhow::anyhow!("H7105 Custom stage 2 unavailable"))?,
+            )?,
+            H7105CustomStageConfig::from_packet(
+                packets[2].ok_or_else(|| anyhow::anyhow!("H7105 Custom stage 3 unavailable"))?,
+            )?,
+        ])
+    }
+
+    pub fn set_h7105_oscillation(&mut self, oscillating: bool, params: [u8; 5]) {
+        self.h7105_fan_state.oscillating.replace(oscillating);
+        self.h7105_fan_state.oscillation_params.replace(params);
     }
 
     pub fn set_target_humidity(&mut self, percent: u8) {
@@ -433,7 +524,7 @@ impl Device {
 
         let device_type = self.device_type();
         match (device_type, self.sku.as_str()) {
-            (_, "H5086" | "H7160") => false,
+            (_, "H5086" | "H7105" | "H7160") => false,
             (DeviceType::Humidifier, _) => true,
             (DeviceType::Light, _) => false,
             (DeviceType::Kettle, _) => true,
@@ -452,7 +543,7 @@ impl Device {
         let device_type = self.device_type();
         matches!(
             (device_type, self.sku.as_str()),
-            (_, "H5086" | "H7160") | (DeviceType::Light, _)
+            (_, "H5086" | "H7105" | "H7160") | (DeviceType::Light, _)
         )
     }
 
@@ -621,6 +712,30 @@ mod test {
 
         let device = Device::new("H6127", "ce");
         assert_eq!(device.name(), "H6127_CE");
+    }
+
+    #[test]
+    fn h7105_caches_custom_fragments_and_single_sleep_packet() {
+        let mut device = Device::new("H7105", "AA:BB:CC:DD:EE:FF");
+        for line in 0..3u8 {
+            let mut packet = [0u8; 20];
+            packet[0..4].copy_from_slice(&[0xaa, 0x05, H7105FanMode::Custom as u8, line]);
+            device.cache_h7105_mode_config(&packet);
+        }
+        let mut sleep = [0u8; 20];
+        sleep[0..4].copy_from_slice(&[0xaa, 0x05, H7105FanMode::Sleep as u8, 7]);
+        device.cache_h7105_mode_config(&sleep);
+
+        let custom_cached =
+            device.h7105_fan_state.mode_config_packets[(H7105FanMode::Custom as usize) - 1];
+        assert_eq!(custom_cached[0].unwrap()[3], 0);
+        assert_eq!(custom_cached[1].unwrap()[3], 1);
+        assert_eq!(custom_cached[2].unwrap()[3], 2);
+        let sleep_cached =
+            device.h7105_fan_state.mode_config_packets[(H7105FanMode::Sleep as usize) - 1];
+        assert_eq!(sleep_cached[0].unwrap()[3], 7);
+        assert!(sleep_cached[1].is_none());
+        assert!(sleep_cached[2].is_none());
     }
 
     #[test]

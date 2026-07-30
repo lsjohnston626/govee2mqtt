@@ -1,6 +1,10 @@
 use crate::hass_mqtt::base::{Device, EntityConfig, Origin};
 use crate::hass_mqtt::button::ButtonConfig;
 use crate::hass_mqtt::climate::TargetTemperatureEntity;
+use crate::hass_mqtt::fan::{
+    H7105AutoNumber, H7105AutoOscillationSpeed, H7105AutoSwitch, H7105CustomSensor, H7105Fan,
+    H7105OscillationAngle, H7105OscillationSpeed, H7105OscillationSymmetric,
+};
 use crate::hass_mqtt::humidifier::Humidifier;
 use crate::hass_mqtt::instance::EntityList;
 use crate::hass_mqtt::light::DeviceLight;
@@ -157,6 +161,25 @@ pub async fn enumerate_entities_for_device(
 
     entities.add(DeviceStatusDiagnostic::new(d, state));
     entities.add(ButtonConfig::request_platform_data_for_device(d));
+
+    if d.sku == "H7105" {
+        entities.add(H7105Fan::new(d, state));
+        for angle in H7105OscillationAngle::all(d, state) {
+            entities.add(angle);
+        }
+        entities.add(H7105OscillationSpeed::new(d, state));
+        entities.add(H7105OscillationSymmetric::new(d, state));
+        for entity in H7105AutoNumber::all(d, state) {
+            entities.add(entity);
+        }
+        for entity in H7105AutoSwitch::all(d, state) {
+            entities.add(entity);
+        }
+        entities.add(H7105AutoOscillationSpeed::new(d, state));
+        for entity in H7105CustomSensor::all(d, state) {
+            entities.add(entity);
+        }
+    }
 
     if d.sku == "H5086" {
         for measurement in H5086Measurement::all(d, state) {

@@ -1,5 +1,10 @@
 use crate::hass_mqtt::climate::mqtt_set_temperature;
 use crate::hass_mqtt::enumerator::{enumerate_all_entites, enumerate_entities_for_device};
+use crate::hass_mqtt::fan::{
+    mqtt_h7105_auto_control, mqtt_h7105_oscillation, mqtt_h7105_oscillation_angle,
+    mqtt_h7105_oscillation_speed, mqtt_h7105_oscillation_symmetric, mqtt_h7105_power,
+    mqtt_h7105_preset, mqtt_h7105_speed,
+};
 use crate::hass_mqtt::humidifier::{mqtt_device_set_work_mode, mqtt_humidifier_set_target};
 use crate::hass_mqtt::instance::EntityList;
 use crate::hass_mqtt::number::mqtt_number_command;
@@ -522,6 +527,45 @@ async fn run_mqtt_loop(
 
         router
             .route("gv2mqtt/light/:id/command", mqtt_light_command)
+            .await?;
+        router
+            .route("gv2mqtt/fan/:id/command", mqtt_h7105_power)
+            .await?;
+        router
+            .route("gv2mqtt/fan/:id/speed/command", mqtt_h7105_speed)
+            .await?;
+        router
+            .route("gv2mqtt/fan/:id/preset/command", mqtt_h7105_preset)
+            .await?;
+        router
+            .route(
+                "gv2mqtt/fan/:id/oscillation/command",
+                mqtt_h7105_oscillation,
+            )
+            .await?;
+        router
+            .route(
+                "gv2mqtt/fan/:id/oscillation-angle/:side/command",
+                mqtt_h7105_oscillation_angle,
+            )
+            .await?;
+        router
+            .route(
+                "gv2mqtt/fan/:id/oscillation/speed/command",
+                mqtt_h7105_oscillation_speed,
+            )
+            .await?;
+        router
+            .route(
+                "gv2mqtt/fan/:id/oscillation/symmetric/command",
+                mqtt_h7105_oscillation_symmetric,
+            )
+            .await?;
+        router
+            .route(
+                "gv2mqtt/fan/:id/auto/:field/command",
+                mqtt_h7105_auto_control,
+            )
             .await?;
         router
             .route(
