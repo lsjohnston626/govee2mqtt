@@ -21,7 +21,7 @@ webui: http://[HOST]:[PORT:8056]/assets/index.html
 host_network: true
 
 map:
-  - type: addon_config
+  - type: app_config
     read_only: false
     path: /app/config
 
