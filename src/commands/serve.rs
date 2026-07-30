@@ -13,7 +13,7 @@ use chrono::Utc;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, Duration, Instant};
 
 pub static POLL_INTERVAL: Lazy<chrono::Duration> = Lazy::new(|| chrono::Duration::seconds(900));
 
@@ -171,6 +171,7 @@ const ISSUE_76_EXPLANATION: &str = "Startup cannot automatically continue becaus
 
 impl ServeCommand {
     pub async fn run(&self, args: &crate::Args) -> anyhow::Result<()> {
+        let startup_started = Instant::now();
         log::info!("Starting service. version {}", govee_version());
         let state = Arc::new(crate::service::state::State::new());
 
@@ -178,6 +179,7 @@ impl ServeCommand {
         // their names.
 
         if let Ok(client) = args.api_args.api_client() {
+            let discovery_started = Instant::now();
             if let Err(err) =
                 enumerate_devices_via_platform_api(state.clone(), Some(client.clone())).await
             {
@@ -185,6 +187,10 @@ impl ServeCommand {
                     "Error during initial platform API discovery: {err:#}\n{ISSUE_76_EXPLANATION}"
                 );
             }
+            log::info!(
+                "Initial platform API discovery completed in {:?}",
+                discovery_started.elapsed()
+            );
 
             // only record the client after we've completed the
             // initial platform disco attempt
@@ -203,6 +209,7 @@ impl ServeCommand {
             });
         }
         if let Ok(client) = args.undoc_args.api_client() {
+            let discovery_started = Instant::now();
             if let Err(err) = enumerate_devices_via_undo_api(
                 state.clone(),
                 Some(client.clone()),
@@ -214,6 +221,10 @@ impl ServeCommand {
                     "Error during initial undoc API discovery: {err:#}\n{ISSUE_76_EXPLANATION}"
                 );
             }
+            log::info!(
+                "Initial undocumented API discovery completed in {:?}",
+                discovery_started.elapsed()
+            );
 
             // only record the client after we've completed the
             // initial undoc disco attempt
@@ -237,7 +248,8 @@ impl ServeCommand {
         // Now start LAN discovery
 
         let options = args.lan_disco_args.to_disco_options()?;
-        if !options.is_empty() {
+        let lan_discovery_enabled = !options.is_empty();
+        if lan_discovery_enabled {
             log::info!("Starting LAN discovery");
             let state = state.clone();
             let (client, mut scan) = LanClient::new(options).await?;
@@ -277,11 +289,17 @@ impl ServeCommand {
             sleep(Duration::from_secs(10)).await;
         }
 
-        log::info!("Devices returned from Govee's APIs");
-        for device in state.devices().await {
-            log::info!("{device}");
+        let devices = state.devices().await;
+        log::info!(
+            "Discovered {} Govee devices in {:?}",
+            devices.len(),
+            startup_started.elapsed()
+        );
+        log::debug!("Devices returned from Govee's APIs");
+        for device in devices {
+            log::debug!("{device}");
             if let Some(lan) = &device.lan_device {
-                log::info!("  LAN API: ip={:?}", lan.ip);
+                log::debug!("  LAN API: ip={:?}", lan.ip);
             }
             if let Some(http_info) = &device.http_device_info {
                 let kind = &http_info.device_type;
@@ -289,30 +307,35 @@ impl ServeCommand {
                 let bright = http_info.supports_brightness();
                 let color_temp = http_info.get_color_temperature_range();
                 let segment_rgb = http_info.supports_segmented_rgb();
-                log::info!(
+                log::debug!(
                     "  Platform API: {kind}. supports_rgb={rgb} supports_brightness={bright}"
                 );
-                log::info!("                color_temp={color_temp:?} segment_rgb={segment_rgb:?}");
+                log::debug!(
+                    "                color_temp={color_temp:?} segment_rgb={segment_rgb:?}"
+                );
                 log::trace!("{http_info:#?}");
             }
             if let Some(undoc) = &device.undoc_device_info {
                 let room = &undoc.room_name;
                 let supports_iot = undoc.entry.device_ext.device_settings.topic.is_some();
                 let ble_only = undoc.entry.device_ext.device_settings.wifi_name.is_none();
-                log::info!(
+                log::debug!(
                     "  Undoc: room={room:?} supports_iot={supports_iot} ble_only={ble_only}"
                 );
                 log::trace!("{undoc:#?}");
             }
             if let Some(quirk) = device.resolve_quirk() {
-                log::info!("  {quirk:?}");
+                log::debug!("  {quirk:?}");
 
                 // Sanity check for LAN devices: if we don't see an API for it,
                 // it may indicate a networking issue
-                if quirk.lan_api_capable && device.lan_device.is_none() {
+                if lan_discovery_enabled
+                    && quirk.lan_api_capable
+                    && device.lan_device.is_none()
+                {
                     log::warn!(
-                        "  This device should be available via the LAN API, \
-                        but didn't respond to probing yet. Possible causes:"
+                        "{device}: expected LAN API support, but the device did not \
+                        respond to probing. Possible causes:"
                     );
                     log::warn!("  1) LAN API needs to be enabled in the Govee Home App.");
                     log::warn!("  2) The device is offline.");
@@ -325,7 +348,7 @@ impl ServeCommand {
                     );
                 }
             } else if device.http_device_info.is_none() {
-                log::warn!("  Unknown device type. Cannot map to Home Assistant.");
+                log::warn!("{device}: unknown device type; cannot map to Home Assistant");
                 if state.get_platform_client().await.is_none() {
                     log::warn!(
                         "  Recommendation: configure your Govee API Key so that \
@@ -334,7 +357,7 @@ impl ServeCommand {
                 }
             }
 
-            log::info!("");
+            log::debug!("");
         }
 
         // Start periodic status polling
