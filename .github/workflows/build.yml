@@ -148,7 +148,7 @@ jobs:
           docker buildx imagetools inspect ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
   addon:
     if: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     needs:
       - merge
     permissions:
