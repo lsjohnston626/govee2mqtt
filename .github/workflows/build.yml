@@ -157,21 +157,23 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v6
-      - name: Login to GHCR
-        uses: docker/login-action@v4
+      - name: Build and publish Home Assistant app image
+        uses: home-assistant/builder/actions/build-image@2026.06.0
         with:
-          registry: https://ghcr.io
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Apply tag to version
-        run: ./scripts/apply-tag.sh
-      - name: Build and Publish Home Assistant Add On
-        uses: home-assistant/builder@2026.02.1
-        with:
-          args: |
-            --aarch64 \
-            --cosign \
-            --target /data/addon
+          arch: aarch64
+          build-args: |
+            BUILD_FROM=ghcr.io/home-assistant/aarch64-base-debian:bookworm
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+          context: ./addon
+          image: ghcr.io/lsjohnston626/govee2mqtt-addon-aarch64
+          image-tags: ${{ github.ref_name }}
+          labels: |
+            io.hass.type=app
+            io.hass.name=Govee Fork Bridge
+            io.hass.description=Control Govee Devices
+            io.hass.url=https://github.com/lsjohnston626/govee2mqtt
+          push: "true"
+          version: ${{ github.ref_name }}
 
   test-addon:
     if: ${{ github.repository == 'wez/govee2mqtt' && ! ( github.event_name == 'push' && github.ref_type == 'tag' ) }}
