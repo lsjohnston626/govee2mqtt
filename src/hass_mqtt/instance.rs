@@ -5,6 +5,10 @@ use anyhow::Context;
 use async_trait::async_trait;
 use serde::Serialize;
 use std::sync::Arc;
+use tokio::task::JoinSet;
+
+// Bound discovery traffic while avoiding a fixed delay for every entity.
+const CONFIG_PUBLISH_CONCURRENCY: usize = 4;
 
 #[async_trait]
 pub trait EntityInstance: Send + Sync {
@@ -53,14 +57,32 @@ impl EntityList {
         state: &StateHandle,
         client: &HassClient,
     ) -> anyhow::Result<()> {
-        // Allow HASS time to process each entity before registering the next
-        let delay = tokio::time::Duration::from_millis(100);
-        for e in &self.entities {
-            e.publish_config(state, client)
-                .await
-                .context("EntityList::publish_config")?;
-            tokio::time::sleep(delay).await;
+        let state = state.clone();
+        let client = client.clone();
+        let mut entities = self.entities.iter().cloned();
+        let mut jobs = JoinSet::new();
+
+        loop {
+            while jobs.len() < CONFIG_PUBLISH_CONCURRENCY {
+                let Some(entity) = entities.next() else {
+                    break;
+                };
+                let state = state.clone();
+                let client = client.clone();
+                jobs.spawn(async move {
+                    entity
+                        .publish_config(&state, &client)
+                        .await
+                        .context("EntityList::publish_config")
+                });
+            }
+
+            let Some(result) = jobs.join_next().await else {
+                break;
+            };
+            result.context("MQTT discovery publication task")??;
         }
+
         Ok(())
     }
 
