@@ -254,9 +254,19 @@ impl Device {
     }
 
     pub fn h7105_auto_config(&self) -> anyhow::Result<H7105AutoConfig> {
-        let packet = self.h7105_fan_state.mode_config_packets[(H7105FanMode::Auto as usize) - 1][0]
-            .ok_or_else(|| anyhow::anyhow!("H7105 Auto configuration unavailable"))?;
-        H7105AutoConfig::from_packet(packet)
+        self.h7105_auto_config_if_available()?
+            .ok_or_else(|| anyhow::anyhow!("H7105 Auto configuration unavailable"))
+    }
+
+    pub fn h7105_auto_config_if_available(
+        &self,
+    ) -> anyhow::Result<Option<H7105AutoConfig>> {
+        let Some(packet) = self.h7105_fan_state.mode_config_packets
+            [(H7105FanMode::Auto as usize) - 1][0]
+        else {
+            return Ok(None);
+        };
+        H7105AutoConfig::from_packet(packet).map(Some)
     }
 
     pub fn h7105_custom_stages(&self) -> anyhow::Result<[H7105CustomStageConfig; 3]> {
@@ -272,6 +282,17 @@ impl Device {
                 packets[2].ok_or_else(|| anyhow::anyhow!("H7105 Custom stage 3 unavailable"))?,
             )?,
         ])
+    }
+
+    pub fn h7105_custom_stages_if_available(
+        &self,
+    ) -> anyhow::Result<Option<[H7105CustomStageConfig; 3]>> {
+        let packets = self.h7105_fan_state.mode_config_packets
+            [(H7105FanMode::Custom as usize) - 1];
+        if packets.iter().any(Option::is_none) {
+            return Ok(None);
+        }
+        self.h7105_custom_stages().map(Some)
     }
 
     pub fn set_h7105_oscillation(&mut self, oscillating: bool, params: [u8; 5]) {
@@ -736,6 +757,41 @@ mod test {
         assert_eq!(sleep_cached[0].unwrap()[3], 7);
         assert!(sleep_cached[1].is_none());
         assert!(sleep_cached[2].is_none());
+    }
+
+    #[test]
+    fn h7105_unpolled_mode_configs_are_pending_but_strict_access_still_errors() {
+        let device = Device::new("H7105", "AA:BB:CC:DD:EE:FF");
+
+        assert_eq!(device.h7105_auto_config_if_available().unwrap(), None);
+        assert_eq!(device.h7105_custom_stages_if_available().unwrap(), None);
+        assert!(device.h7105_auto_config().is_err());
+        assert!(device.h7105_custom_stages().is_err());
+    }
+
+    #[test]
+    fn h7105_available_auto_config_is_validated() {
+        let mut device = Device::new("H7105", "AA:BB:CC:DD:EE:FF");
+        let mut packet = [
+            0xaa, 0x05, 0x02, 0x03, 0x1d, 0x5f, 0x05, 0x1e, 0xc8, 0x00, 0x01, 0x1e, 0x01,
+            0xc2, 0x01, 0, 0, 0, 0, 0,
+        ];
+        packet[19] = packet[..19]
+            .iter()
+            .fold(0, |checksum, byte| checksum ^ byte);
+        device.cache_h7105_mode_config(&packet);
+
+        let config = device
+            .h7105_auto_config_if_available()
+            .unwrap()
+            .expect("Auto configuration should be available");
+        assert_eq!(config.on_temperature_c, 24);
+        assert_eq!(config.keep_temperature_c, 26);
+
+        device.h7105_fan_state.mode_config_packets[(H7105FanMode::Auto as usize) - 1][0]
+            .as_mut()
+            .unwrap()[19] ^= 0xff;
+        assert!(device.h7105_auto_config_if_available().is_err());
     }
 
     #[test]

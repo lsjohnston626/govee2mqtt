@@ -617,7 +617,13 @@ impl EntityInstance for H7105AutoNumber {
             .device_by_id(&self.device_id)
             .await
             .expect("device to exist");
-        let auto = device.h7105_auto_config()?;
+        let Some(auto) = device.h7105_auto_config_if_available()? else {
+            log::debug!(
+                "H7105 Auto configuration not available yet for {}; skipping state publication",
+                device
+            );
+            return Ok(());
+        };
         let value = match self.kind {
             H7105AutoNumberKind::OnTemperature => auto.on_temperature_c.to_string(),
             H7105AutoNumberKind::KeepTemperature => auto.keep_temperature_c.to_string(),
@@ -696,7 +702,13 @@ impl EntityInstance for H7105AutoSwitch {
             .device_by_id(&self.device_id)
             .await
             .expect("device to exist");
-        let auto = device.h7105_auto_config()?;
+        let Some(auto) = device.h7105_auto_config_if_available()? else {
+            log::debug!(
+                "H7105 Auto configuration not available yet for {}; skipping state publication",
+                device
+            );
+            return Ok(());
+        };
         let on = match self.kind {
             H7105AutoSwitchKind::Oscillation => auto.oscillating,
             H7105AutoSwitchKind::Symmetric => auto.oscillation.flags == 0,
@@ -749,7 +761,13 @@ impl EntityInstance for H7105AutoOscillationSpeed {
             .device_by_id(&self.device_id)
             .await
             .expect("device to exist");
-        let auto = device.h7105_auto_config()?;
+        let Some(auto) = device.h7105_auto_config_if_available()? else {
+            log::debug!(
+                "H7105 Auto configuration not available yet for {}; skipping state publication",
+                device
+            );
+            return Ok(());
+        };
         client
             .publish(
                 &self.config.state_topic,
@@ -905,7 +923,13 @@ impl EntityInstance for H7105CustomSensor {
             .device_by_id(&self.device_id)
             .await
             .expect("device to exist");
-        let stages = device.h7105_custom_stages()?;
+        let Some(stages) = device.h7105_custom_stages_if_available()? else {
+            log::debug!(
+                "H7105 Custom configuration not available yet for {}; skipping state publication",
+                device
+            );
+            return Ok(());
+        };
         let value = match self.kind {
             H7105CustomSensorKind::ActiveStage => stages
                 .iter()
