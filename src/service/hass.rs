@@ -25,6 +25,18 @@ use std::time::{Duration, Instant};
 
 const HASS_REGISTER_DELAY: Duration = Duration::from_secs(15);
 
+#[derive(Clone, Copy)]
+enum PublishRetention {
+    Transient,
+    Availability,
+}
+
+impl PublishRetention {
+    const fn retain(self) -> bool {
+        matches!(self, Self::Availability)
+    }
+}
+
 #[derive(clap::Parser, Debug)]
 pub struct HassArguments {
     /// The mqtt broker hostname or address.
@@ -148,9 +160,13 @@ impl HassClient {
 
         // Mark as available
         log::trace!("register_with_hass: mark as online");
-        self.publish(availability_topic(), "online")
-            .await
-            .context("online -> availability_topic")?;
+        self.publish_with_retention(
+            availability_topic(),
+            "online",
+            PublishRetention::Availability,
+        )
+        .await
+        .context("online -> availability_topic")?;
 
         // report initial state
         log::trace!("register_with_hass: reporting state");
@@ -174,9 +190,22 @@ impl HassClient {
         topic: T,
         payload: P,
     ) -> anyhow::Result<()> {
+        self.publish_with_retention(topic, payload, PublishRetention::Transient)
+            .await
+    }
+
+    async fn publish_with_retention<
+        T: AsRef<str> + std::fmt::Display,
+        P: AsRef<[u8]> + std::fmt::Display,
+    >(
+        &self,
+        topic: T,
+        payload: P,
+        retention: PublishRetention,
+    ) -> anyhow::Result<()> {
         log::trace!("{topic} -> {payload}");
         self.client
-            .publish(topic, payload, QoS::AtMostOnce, false)
+            .publish(topic, payload, QoS::AtMostOnce, retention.retain())
             .await?;
         Ok(())
     }
@@ -189,7 +218,12 @@ impl HassClient {
         let payload = serde_json::to_string(&payload)?;
         log::trace!("{topic} -> {payload}");
         self.client
-            .publish(topic, payload, QoS::AtMostOnce, false)
+            .publish(
+                topic,
+                payload,
+                QoS::AtMostOnce,
+                PublishRetention::Transient.retain(),
+            )
             .await?;
         Ok(())
     }
@@ -705,7 +739,12 @@ pub async fn spawn_hass_integration(
     let mqtt_password = args.mqtt_password()?;
     let mqtt_port = args.mqtt_port()?;
 
-    client.set_last_will(availability_topic(), "offline", QoS::AtMostOnce, false)?;
+    client.set_last_will(
+        availability_topic(),
+        "offline",
+        QoS::AtMostOnce,
+        PublishRetention::Availability.retain(),
+    )?;
 
     if mqtt_username.is_some() != mqtt_password.is_some() {
         log::error!(
@@ -789,6 +828,12 @@ pub fn camel_case_to_space_separated(camel: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_availability_messages_are_retained() {
+        assert!(PublishRetention::Availability.retain());
+        assert!(!PublishRetention::Transient.retain());
+    }
 
     #[test]
     fn test_camel_case_to_space_separated() {
